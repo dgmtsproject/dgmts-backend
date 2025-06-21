@@ -1,0 +1,5 @@
+---
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home/dulles1/public_html/flaskapp/
+    - /bin/cp * $DEPLOYPATH
