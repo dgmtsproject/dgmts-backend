@@ -12,7 +12,7 @@ def test():
 
 @app.route('/api/githubtest')
 def githubtest():
-    return jsonify({"data": "Testing github push integration reflected in GoDaddy!"})
+    return jsonify({"data": "changes from local reflected in GoDaddy!"})
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)  # Added port configuration
