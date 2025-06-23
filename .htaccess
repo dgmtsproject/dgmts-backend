@@ -1,0 +1,10 @@
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION BEGIN
+PassengerAppRoot "/home/dulles1/public_html/flaskapp"
+PassengerBaseURI "/flaskapp"
+PassengerPython "/home/dulles1/virtualenv/public_html/flaskapp/3.11/bin/python"
+PassengerAppLogFile "/home/dulles1/public_html/flaskapp/app.log"
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
+# DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION BEGIN
+<IfModule Litespeed>
+</IfModule>
+# DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION END
