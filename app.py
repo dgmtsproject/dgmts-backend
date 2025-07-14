@@ -39,6 +39,13 @@ def create_jwt(user):
         'user_id': user['id'],
         'email': user['email'],
         'role': user.get('role', 'user'),
+        'permissions': {
+            'access_to_site': user.get('access_to_site', False),
+            'view_graph': user.get('view_graph', False),
+            'view_data': user.get('view_data', False),
+            'download_graph': user.get('download_graph', False),
+            'download_data': user.get('download_data', False)
+        },
         'exp': datetime.utcnow() + timedelta(seconds=JWT_EXP_DELTA_SECONDS)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -89,7 +96,14 @@ def login():
             "user": {
                 "id": user['id'],
                 "email": user['email'],
-                "role": user.get('role', 'user')
+                "role": user.get('role', 'user'),
+                "permissions": {
+                    "access_to_site": user.get('access_to_site', False),
+                    "view_graph": user.get('view_graph', False),
+                    "view_data": user.get('view_data', False),
+                    "download_graph": user.get('download_graph', False),
+                    "download_data": user.get('download_data', False)
+                }
             }
         })
     except Exception as e:
@@ -110,7 +124,8 @@ def check_auth():
         "authenticated": True,
         "user": {
             "email": user['email'],
-            "role": user['role']
+            "role": user['role'],
+            "permissions": user.get('permissions', {})
         }
     })
 
