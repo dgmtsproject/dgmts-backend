@@ -3,3 +3,4 @@ flask_cors
 supabase
 python-dotenv
 werkzeug
+PyJWT
