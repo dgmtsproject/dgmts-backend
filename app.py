@@ -19,15 +19,7 @@ app.config.update(
 )
 
 # CORS configuration with credentials support
-CORS(app, 
-     resources={r"/*": {
-         "origins": "*",
-         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-         "allow_headers": ["Content-Type", "Authorization"],
-         "supports_credentials": True
-     }},
-     supports_credentials=True
-)
+CORS(app, supports_credentials=True)
 
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
