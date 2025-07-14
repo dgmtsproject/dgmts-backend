@@ -12,9 +12,9 @@ app.secret_key = os.environ['FLASK_SECRET_KEY']
 
 # Configure session settings
 app.config.update(
-    SESSION_COOKIE_SECURE=False,  # False for HTTP
+    SESSION_COOKIE_SECURE=True,      # Must be True for SameSite=None (requires HTTPS)
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SAMESITE='None',  # Must be 'None' for cross-site
     PERMANENT_SESSION_LIFETIME=3600  # 1 hour
 )
 
@@ -64,8 +64,8 @@ def login():
             value=session['session_id'],
             max_age=3600,
             httponly=True,
-            secure=False,  # False for HTTP
-            samesite='Lax',
+            secure=True,         # Must be True for SameSite=None (requires HTTPS)
+            samesite='None',     # Must be 'None' for cross-site
             path='/'
         )
 
