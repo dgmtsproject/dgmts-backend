@@ -239,7 +239,7 @@ def forgot_password():
         }
         
         # Create reset link
-        reset_link = f"http://localhost:5173/reset-password?token={reset_token}"
+        reset_link = f"https://dgmts-imsite.dullesgeotechnical.com/signin/reset-password?token={reset_token}"
         
         # Email content
         subject = "Password Reset Request - DGMTS"
