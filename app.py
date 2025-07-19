@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
 import uuid
 import jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from flask import request
 import smtplib
@@ -17,6 +17,7 @@ import requests
 import schedule
 import time
 import threading
+import pytz
 
 load_dotenv()
 app = Flask(__name__)
@@ -66,12 +67,18 @@ def send_email(to_email, subject, body):
     """Send email using Microsoft 365 SMTP"""
     try:
         msg = MIMEMultipart()
+        # Accept both string and list for to_email
+        if isinstance(to_email, str):
+            recipients = [email.strip() for email in to_email.split(',') if email.strip()]
+        else:
+            recipients = to_email
+
         msg['From'] = EMAIL_USERNAME
-        msg['To'] = to_email
+        msg['To'] = ", ".join(recipients)
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'html'))
 
-        print(f"Attempting to send email to {to_email}")
+        print(f"Attempting to send email to {recipients}")
         print(f"SMTP Server: {SMTP_SERVER}:{SMTP_PORT}")
         print(f"Username: {EMAIL_USERNAME}")
         
@@ -81,7 +88,7 @@ def send_email(to_email, subject, body):
         server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
         print("Login successful")
         
-        server.sendmail(EMAIL_USERNAME, to_email, msg.as_string())
+        server.sendmail(EMAIL_USERNAME, recipients, msg.as_string())
         print("Email sent successfully")
         
         server.quit()
@@ -437,6 +444,209 @@ def fetch_and_store_all_sensor_data():
             print(f"No data received for node {node_id}")
     print("Completed fetch_and_store_all_sensor_data")
 
+def check_and_send_tiltmeter_alerts():
+    print("Checking tiltmeter 30846 alerts for both nodes...")
+    try:
+        # 1. Get instrument settings
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'TI-30846').execute()
+        instrument = instrument_resp.data[0] if instrument_resp.data else None
+        if not instrument:
+            print("No instrument found for TI-30846")
+            return
+
+        alert_value = instrument.get('alert_value')
+        warning_value = instrument.get('warning_value')
+        shutdown_value = instrument.get('shutdown_value')
+        alert_emails = instrument.get('alert_emails') or []
+        warning_emails = instrument.get('warning_emails') or []
+        shutdown_emails = instrument.get('shutdown_emails') or []
+
+        node_ids = [142939, 143969]
+        node_alerts = {}
+
+        for node_id in node_ids:
+            one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            readings_resp = supabase.table('sensor_readings') \
+                .select('*') \
+                .eq('node_id', node_id) \
+                .gte('timestamp', one_hour_ago) \
+                .order('timestamp', desc=False) \
+                .execute()
+            readings = readings_resp.data if readings_resp.data else []
+
+            node_messages = []
+            for reading in readings:
+                timestamp = reading['timestamp']
+                x = reading.get('x_value')
+                y = reading.get('y_value')
+                z = reading.get('z_value')
+
+                # Check if we've already sent for this timestamp
+                already_sent = supabase.table('sent_alerts') \
+                    .select('id') \
+                    .eq('instrument_id', 'TI-30846') \
+                    .eq('node_id', node_id) \
+                    .eq('timestamp', timestamp) \
+                    .execute()
+                if already_sent.data:
+                    print(f"Alert already sent for node {node_id} at {timestamp}, skipping.")
+                    continue
+
+                # Format timestamp to EST
+                try:
+                    dt_utc = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    est = pytz.timezone('US/Eastern')
+                    dt_est = dt_utc.astimezone(est)
+                    formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+                except Exception as e:
+                    print(f"Failed to parse/convert timestamp: {timestamp}, error: {e}")
+                    formatted_time = timestamp
+
+                messages = []
+                for axis, value in [('X', x), ('Y', y), ('Z', z)]:
+                    if value is None:
+                        continue
+                    if shutdown_value and abs(value) >= shutdown_value:
+                        messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
+                for axis, value in [('X', x), ('Y', y), ('Z', z)]:
+                    if value is None:
+                        continue
+                    if warning_value and abs(value) >= warning_value:
+                        messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
+                for axis, value in [('X', x), ('Y', y), ('Z', z)]:
+                    if value is None:
+                        continue
+                    if alert_value and abs(value) >= alert_value:
+                        messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
+
+                if messages:
+                    node_messages.append(f"<u><b>Timestamp: {formatted_time}</b></u><br>" + "<br>".join(messages))
+                    # Record that we've sent for this timestamp
+                    supabase.table('sent_alerts').insert({
+                        'instrument_id': 'TI-30846',
+                        'node_id': node_id,
+                        'timestamp': timestamp,
+                        'alert_type': 'any'
+                    }).execute()
+
+            if node_messages:
+                node_alerts[node_id] = node_messages
+
+        if node_alerts:
+            body = ""
+            for node_id in node_ids:
+                if node_id in node_alerts:
+                    body += f"<h3>Alerts for Node {node_id}</h3>\n"
+                    body += "<br><br>".join(node_alerts[node_id])
+                    body += "<br><br>"
+            subject = "Tiltmeter 30846 Alert(s) for the Last Hour"
+            all_emails = set(alert_emails + warning_emails + shutdown_emails)
+            if all_emails:
+                send_email(",".join(all_emails), subject, body)
+                print("Sent alert email for both nodes")
+            else:
+                print("No alert/warning/shutdown emails configured for TI-30846")
+        else:
+            print("No alerts to send for either node in the last hour.")
+    except Exception as e:
+        print(f"Error in check_and_send_tiltmeter_alerts: {e}")
+
+def check_and_send_seismograph_alert():
+    print("Checking seismograph alerts...")
+    try:
+        # 1. Get instrument settings
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG-1').execute()
+        instrument = instrument_resp.data[0] if instrument_resp.data else None
+        if not instrument:
+            print("No instrument found for SMG-1")
+            return
+
+        alert_value = instrument.get('alert_value')
+        warning_value = instrument.get('warning_value')
+        shutdown_value = instrument.get('shutdown_value')
+        alert_emails = instrument.get('alert_emails') or []
+        warning_emails = instrument.get('warning_emails') or []
+        shutdown_emails = instrument.get('shutdown_emails') or []
+
+        # 2. Fetch latest event from Syscom API
+        api_key = os.environ.get('SYSCOM_API_KEY')
+        if not api_key:
+            print("No SYSCOM_API_KEY set in environment")
+            return
+
+        url = "https://scs.syscom-instruments.com/public-api/v1/records/events/latest"
+        headers = {"x-scs-api-key": api_key}
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            print(f"Failed to fetch latest event: {response.status_code} {response.text}")
+            return
+
+        event = response.json()
+        trigger_time = event.get('triggerTime')
+        peakX = event.get('peakX')
+        peakY = event.get('peakY')
+        peakZ = event.get('peakZ')
+        event_id = event.get('id')
+        node_id = 15092  # Seismograph device
+
+        if not trigger_time or peakX is None or peakY is None or peakZ is None:
+            print("Incomplete event data, skipping.")
+            return
+
+        # 3. Check if we've already sent for this triggerTime
+        already_sent = supabase.table('sent_alerts') \
+            .select('id') \
+            .eq('instrument_id', 'SMG-1') \
+            .eq('node_id', node_id) \
+            .eq('timestamp', trigger_time) \
+            .execute()
+        if already_sent.data:
+            print(f"Alert already sent for event at {trigger_time}, skipping.")
+            return
+
+        # 4. Compare to thresholds
+        messages = []
+        for axis, value in [('X', peakX), ('Y', peakY), ('Z', peakZ)]:
+            if shutdown_value and abs(value) >= shutdown_value:
+                messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value}")
+        for axis, value in [('X', peakX), ('Y', peakY), ('Z', peakZ)]:
+            if warning_value and abs(value) >= warning_value:
+                messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value}")
+        for axis, value in [('X', peakX), ('Y', peakY), ('Z', peakZ)]:
+            if alert_value and abs(value) >= alert_value:
+                messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value}")
+
+        if messages:
+            # Format trigger_time to EST
+            try:
+                dt_utc = datetime.fromisoformat(trigger_time.replace('Z', '+00:00'))
+                est = pytz.timezone('US/Eastern')
+                dt_est = dt_utc.astimezone(est)
+                formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+            except Exception as e:
+                print(f"Failed to parse/convert trigger_time: {trigger_time}, error: {e}")
+                formatted_time = trigger_time
+
+            subject = f"Seismograph Alert(s) at {formatted_time}"
+            body = f"<u><b>Event ID: {event_id}</b></u><br><b>Timestamp:</b> {formatted_time}<br>" + "<br>".join(messages)
+            all_emails = set(alert_emails + warning_emails + shutdown_emails)
+            if all_emails:
+                send_email(",".join(all_emails), subject, body)
+                print(f"Sent seismograph alert email for event at {trigger_time}")
+                # Record that we've sent for this event
+                supabase.table('sent_alerts').insert({
+                    'instrument_id': 'SMG-1',
+                    'node_id': node_id,
+                    'timestamp': trigger_time,
+                    'alert_type': 'any'
+                }).execute()
+            else:
+                print("No alert/warning/shutdown emails configured for SMG-1")
+        else:
+            print("No thresholds crossed for latest event.")
+    except Exception as e:
+        print(f"Error in check_and_send_seismograph_alert: {e}")
+
 # API endpoints for sensor data
 @app.route('/api/sensor-data/<int:node_id>', methods=['GET'])
 def api_get_sensor_data(node_id):
@@ -477,6 +687,8 @@ def run_scheduler():
 
 # Schedule to run every hour
 schedule.every().hour.do(fetch_and_store_all_sensor_data)
+schedule.every().hour.do(check_and_send_tiltmeter_alerts)
+schedule.every().hour.do(check_and_send_seismograph_alert)
 
 # Start scheduler in background
 scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
