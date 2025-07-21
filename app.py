@@ -62,6 +62,8 @@ SENSOR_API_BASE = "https://loadsensing.wocs3.com/30846/dataserver/api/v1/data/no
 SENSOR_USERNAME = "admin"
 SENSOR_PASSWORD = "oNg9ahy3m"
 SENSOR_NODES = [142939, 143969]
+# Mapping from node_id to instrument_id for tiltmeters
+NODE_TO_INSTRUMENT_ID = {142939: "TILT-142939", 143969: "TILT-143969"}
 
 def send_email(to_email, subject, body):
     """Send email using Microsoft 365 SMTP"""
@@ -445,26 +447,30 @@ def fetch_and_store_all_sensor_data():
     print("Completed fetch_and_store_all_sensor_data")
 
 def check_and_send_tiltmeter_alerts():
-    print("Checking tiltmeter 30846 alerts for both nodes...")
+    print("Checking tiltmeter alerts for both nodes...")
     try:
-        # 1. Get instrument settings
-        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'TI-30846').execute()
-        instrument = instrument_resp.data[0] if instrument_resp.data else None
-        if not instrument:
-            print("No instrument found for TI-30846")
-            return
-
-        alert_value = instrument.get('alert_value')
-        warning_value = instrument.get('warning_value')
-        shutdown_value = instrument.get('shutdown_value')
-        alert_emails = instrument.get('alert_emails') or []
-        warning_emails = instrument.get('warning_emails') or []
-        shutdown_emails = instrument.get('shutdown_emails') or []
-
         node_ids = [142939, 143969]
         node_alerts = {}
 
         for node_id in node_ids:
+            instrument_id = NODE_TO_INSTRUMENT_ID.get(node_id)
+            if not instrument_id:
+                print(f"No instrument_id mapping for node {node_id}")
+                continue
+            # 1. Get instrument settings for this node's instrument_id
+            instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
+            instrument = instrument_resp.data[0] if instrument_resp.data else None
+            if not instrument:
+                print(f"No instrument found for {instrument_id}")
+                continue
+
+            alert_value = instrument.get('alert_value')
+            warning_value = instrument.get('warning_value')
+            shutdown_value = instrument.get('shutdown_value')
+            alert_emails = instrument.get('alert_emails') or []
+            warning_emails = instrument.get('warning_emails') or []
+            shutdown_emails = instrument.get('shutdown_emails') or []
+
             one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
             readings_resp = supabase.table('sensor_readings') \
                 .select('*') \
@@ -481,10 +487,10 @@ def check_and_send_tiltmeter_alerts():
                 y = reading.get('y_value')
                 z = reading.get('z_value')
 
-                # Check if we've already sent for this timestamp
+                # Check if we've already sent for this timestamp (use correct instrument_id)
                 already_sent = supabase.table('sent_alerts') \
                     .select('id') \
-                    .eq('instrument_id', 'TI-30846') \
+                    .eq('instrument_id', instrument_id) \
                     .eq('node_id', node_id) \
                     .eq('timestamp', timestamp) \
                     .execute()
@@ -521,9 +527,9 @@ def check_and_send_tiltmeter_alerts():
 
                 if messages:
                     node_messages.append(f"<u><b>Timestamp: {formatted_time}</b></u><br>" + "<br>".join(messages))
-                    # Record that we've sent for this timestamp
+                    # Record that we've sent for this timestamp (use correct instrument_id)
                     supabase.table('sent_alerts').insert({
-                        'instrument_id': 'TI-30846',
+                        'instrument_id': instrument_id,
                         'node_id': node_id,
                         'timestamp': timestamp,
                         'alert_type': 'any'
@@ -539,13 +545,25 @@ def check_and_send_tiltmeter_alerts():
                     body += f"<h3>Alerts for Node {node_id}</h3>\n"
                     body += "<br><br>".join(node_alerts[node_id])
                     body += "<br><br>"
-            subject = "Tiltmeter 30846 Alert(s) for the Last Hour"
-            all_emails = set(alert_emails + warning_emails + shutdown_emails)
+            subject = "Tiltmeter Alert(s) for the Last Hour"
+            # Collect all emails from all instruments
+            all_emails = set()
+            for node_id in node_ids:
+                instrument_id = NODE_TO_INSTRUMENT_ID.get(node_id)
+                if not instrument_id:
+                    continue
+                instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
+                instrument = instrument_resp.data[0] if instrument_resp.data else None
+                if not instrument:
+                    continue
+                all_emails.update(instrument.get('alert_emails') or [])
+                all_emails.update(instrument.get('warning_emails') or [])
+                all_emails.update(instrument.get('shutdown_emails') or [])
             if all_emails:
                 send_email(",".join(all_emails), subject, body)
                 print("Sent alert email for both nodes")
             else:
-                print("No alert/warning/shutdown emails configured for TI-30846")
+                print("No alert/warning/shutdown emails configured for tiltmeters")
         else:
             print("No alerts to send for either node in the last hour.")
     except Exception as e:
