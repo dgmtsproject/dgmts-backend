@@ -576,7 +576,7 @@ def check_and_send_seismograph_alert():
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG1').execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
-            print("No instrument found for SMG-1")
+            print("No instrument found for SMG1")
             return
 
         alert_value = instrument.get('alert_value')
@@ -614,7 +614,7 @@ def check_and_send_seismograph_alert():
         # 3. Check if we've already sent for this triggerTime
         already_sent = supabase.table('sent_alerts') \
             .select('id') \
-            .eq('instrument_id', 'SMG-1') \
+            .eq('instrument_id', 'SMG1') \
             .eq('node_id', node_id) \
             .eq('timestamp', trigger_time) \
             .execute()
@@ -653,13 +653,13 @@ def check_and_send_seismograph_alert():
                 print(f"Sent seismograph alert email for event at {trigger_time}")
                 # Record that we've sent for this event
                 supabase.table('sent_alerts').insert({
-                    'instrument_id': 'SMG-1',
+                    'instrument_id': 'SMG1',
                     'node_id': node_id,
                     'timestamp': trigger_time,
                     'alert_type': 'any'
                 }).execute()
             else:
-                print("No alert/warning/shutdown emails configured for SMG-1")
+                print("No alert/warning/shutdown emails configured for SMG1")
         else:
             print("No thresholds crossed for latest event.")
     except Exception as e:
