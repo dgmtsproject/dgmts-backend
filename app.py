@@ -464,9 +464,24 @@ def check_and_send_tiltmeter_alerts():
                 print(f"No instrument found for {instrument_id}")
                 continue
 
-            alert_value = instrument.get('alert_value')
-            warning_value = instrument.get('warning_value')
-            shutdown_value = instrument.get('shutdown_value')
+            # For tiltmeters, use ONLY XYZ values
+            if instrument_id in ['TILT-142939', 'TILT-143969']:
+                xyz_alert_values = instrument.get('x_y_z_alert_values')
+                xyz_warning_values = instrument.get('x_y_z_warning_values')
+                xyz_shutdown_values = instrument.get('x_y_z_shutdown_values')
+                # Tiltmeters should not use single values
+                alert_value = None
+                warning_value = None
+                shutdown_value = None
+            else:
+                # For non-tiltmeters, use ONLY single values
+                xyz_alert_values = None
+                xyz_warning_values = None
+                xyz_shutdown_values = None
+                alert_value = instrument.get('alert_value')
+                warning_value = instrument.get('warning_value')
+                shutdown_value = instrument.get('shutdown_value')
+            
             alert_emails = instrument.get('alert_emails') or []
             warning_emails = instrument.get('warning_emails') or []
             shutdown_emails = instrument.get('shutdown_emails') or []
@@ -509,20 +524,31 @@ def check_and_send_tiltmeter_alerts():
                     formatted_time = timestamp
 
                 messages = []
-                for axis, value in [('X', x), ('Y', y), ('Z', z)]:
+                # Check shutdown thresholds
+                for axis, value, axis_key in [('X', x, 'x'), ('Y', y, 'y'), ('Z', z, 'z')]:
                     if value is None:
                         continue
-                    if shutdown_value and abs(value) >= shutdown_value:
+                    # For tiltmeters, use ONLY XYZ-specific values
+                    axis_shutdown_value = xyz_shutdown_values.get(axis_key) if xyz_shutdown_values else None
+                    if axis_shutdown_value and abs(value) >= axis_shutdown_value:
                         messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
-                for axis, value in [('X', x), ('Y', y), ('Z', z)]:
+                
+                # Check warning thresholds
+                for axis, value, axis_key in [('X', x, 'x'), ('Y', y, 'y'), ('Z', z, 'z')]:
                     if value is None:
                         continue
-                    if warning_value and abs(value) >= warning_value:
+                    # For tiltmeters, use ONLY XYZ-specific values
+                    axis_warning_value = xyz_warning_values.get(axis_key) if xyz_warning_values else None
+                    if axis_warning_value and abs(value) >= axis_warning_value:
                         messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
-                for axis, value in [('X', x), ('Y', y), ('Z', z)]:
+                
+                # Check alert thresholds
+                for axis, value, axis_key in [('X', x, 'x'), ('Y', y, 'y'), ('Z', z, 'z')]:
                     if value is None:
                         continue
-                    if alert_value and abs(value) >= alert_value:
+                    # For tiltmeters, use ONLY XYZ-specific values
+                    axis_alert_value = xyz_alert_values.get(axis_key) if xyz_alert_values else None
+                    if axis_alert_value and abs(value) >= axis_alert_value:
                         messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
 
                 if messages:
@@ -579,9 +605,14 @@ def check_and_send_seismograph_alert():
             print("No instrument found for SMG1")
             return
 
+        # For seismograph, use ONLY single values (not a tiltmeter)
+        xyz_alert_values = None
+        xyz_warning_values = None
+        xyz_shutdown_values = None
         alert_value = instrument.get('alert_value')
         warning_value = instrument.get('warning_value')
         shutdown_value = instrument.get('shutdown_value')
+        
         alert_emails = instrument.get('alert_emails') or []
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
@@ -624,14 +655,25 @@ def check_and_send_seismograph_alert():
 
         # 4. Compare to thresholds
         messages = []
-        for axis, value in [('X', peakX), ('Y', peakY), ('Z', peakZ)]:
-            if shutdown_value and abs(value) >= shutdown_value:
+        # Check shutdown thresholds
+        for axis, value, axis_key in [('X', peakX, 'x'), ('Y', peakY, 'y'), ('Z', peakZ, 'z')]:
+            # For seismograph, use ONLY single values
+            axis_shutdown_value = shutdown_value
+            if axis_shutdown_value and abs(value) >= axis_shutdown_value:
                 messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value}")
-        for axis, value in [('X', peakX), ('Y', peakY), ('Z', peakZ)]:
-            if warning_value and abs(value) >= warning_value:
+        
+        # Check warning thresholds
+        for axis, value, axis_key in [('X', peakX, 'x'), ('Y', peakY, 'y'), ('Z', peakZ, 'z')]:
+            # For seismograph, use ONLY single values
+            axis_warning_value = warning_value
+            if axis_warning_value and abs(value) >= axis_warning_value:
                 messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value}")
-        for axis, value in [('X', peakX), ('Y', peakY), ('Z', peakZ)]:
-            if alert_value and abs(value) >= alert_value:
+        
+        # Check alert thresholds
+        for axis, value, axis_key in [('X', peakX, 'x'), ('Y', peakY, 'y'), ('Z', peakZ, 'z')]:
+            # For seismograph, use ONLY single values
+            axis_alert_value = alert_value
+            if axis_alert_value and abs(value) >= axis_alert_value:
                 messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value}")
 
         if messages:
