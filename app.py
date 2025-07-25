@@ -457,30 +457,85 @@ def check_and_send_tiltmeter_alerts():
             if not instrument_id:
                 print(f"No instrument_id mapping for node {node_id}")
                 continue
-            # 1. Get instrument settings for this node's instrument_id
+            
+            # 1. First check reference_values table for this instrument
+            reference_resp = supabase.table('reference_values').select('*').eq('instrument_id', instrument_id).execute()
+            reference_values = reference_resp.data[0] if reference_resp.data else None
+            
+            # 2. Get instrument settings for this node's instrument_id
             instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
             instrument = instrument_resp.data[0] if instrument_resp.data else None
             if not instrument:
                 print(f"No instrument found for {instrument_id}")
                 continue
 
-            # For tiltmeters, use ONLY XYZ values
-            if instrument_id in ['TILT-142939', 'TILT-143969']:
-                xyz_alert_values = instrument.get('x_y_z_alert_values')
-                xyz_warning_values = instrument.get('x_y_z_warning_values')
-                xyz_shutdown_values = instrument.get('x_y_z_shutdown_values')
+            # 3. Determine which threshold values to use
+            if reference_values and reference_values.get('enabled', False):
+                # Use reference values when enabled
+                print(f"Using reference values for {instrument_id}")
+                # For reference values, we need to calculate calibrated thresholds
+                # Get the reference values
+                ref_x = reference_values.get('reference_x_value', 0)
+                ref_y = reference_values.get('reference_y_value', 0)
+                ref_z = reference_values.get('reference_z_value', 0)
+                
+                # Get base thresholds from instruments table
+                base_xyz_alert_values = instrument.get('x_y_z_alert_values')
+                base_xyz_warning_values = instrument.get('x_y_z_warning_values')
+                base_xyz_shutdown_values = instrument.get('x_y_z_shutdown_values')
+                
+                # Calculate calibrated thresholds by adding reference values
+                if base_xyz_alert_values:
+                    xyz_alert_values = {
+                        'x': base_xyz_alert_values.get('x', 0) + ref_x if base_xyz_alert_values.get('x') else None,
+                        'y': base_xyz_alert_values.get('y', 0) + ref_y if base_xyz_alert_values.get('y') else None,
+                        'z': base_xyz_alert_values.get('z', 0) + ref_z if base_xyz_alert_values.get('z') else None
+                    }
+                else:
+                    xyz_alert_values = None
+                    
+                if base_xyz_warning_values:
+                    xyz_warning_values = {
+                        'x': base_xyz_warning_values.get('x', 0) + ref_x if base_xyz_warning_values.get('x') else None,
+                        'y': base_xyz_warning_values.get('y', 0) + ref_y if base_xyz_warning_values.get('y') else None,
+                        'z': base_xyz_warning_values.get('z', 0) + ref_z if base_xyz_warning_values.get('z') else None
+                    }
+                else:
+                    xyz_warning_values = None
+                    
+                if base_xyz_shutdown_values:
+                    xyz_shutdown_values = {
+                        'x': base_xyz_shutdown_values.get('x', 0) + ref_x if base_xyz_shutdown_values.get('x') else None,
+                        'y': base_xyz_shutdown_values.get('y', 0) + ref_y if base_xyz_shutdown_values.get('y') else None,
+                        'z': base_xyz_shutdown_values.get('z', 0) + ref_z if base_xyz_shutdown_values.get('z') else None
+                    }
+                else:
+                    xyz_shutdown_values = None
+                
                 # Tiltmeters should not use single values
                 alert_value = None
                 warning_value = None
                 shutdown_value = None
             else:
-                # For non-tiltmeters, use ONLY single values
-                xyz_alert_values = None
-                xyz_warning_values = None
-                xyz_shutdown_values = None
-                alert_value = instrument.get('alert_value')
-                warning_value = instrument.get('warning_value')
-                shutdown_value = instrument.get('shutdown_value')
+                # Use original instrument values when reference values are not enabled
+                print(f"Using original instrument values for {instrument_id}")
+                # For tiltmeters, use ONLY XYZ values
+                if instrument_id in ['TILT-142939', 'TILT-143969']:
+                    xyz_alert_values = instrument.get('x_y_z_alert_values')
+                    xyz_warning_values = instrument.get('x_y_z_warning_values')
+                    xyz_shutdown_values = instrument.get('x_y_z_shutdown_values')
+                    # Tiltmeters should not use single values
+                    alert_value = None
+                    warning_value = None
+                    shutdown_value = None
+                else:
+                    # For non-tiltmeters, use ONLY single values
+                    xyz_alert_values = None
+                    xyz_warning_values = None
+                    xyz_shutdown_values = None
+                    alert_value = instrument.get('alert_value')
+                    warning_value = instrument.get('warning_value')
+                    shutdown_value = instrument.get('shutdown_value')
             
             alert_emails = instrument.get('alert_emails') or []
             warning_emails = instrument.get('warning_emails') or []
@@ -725,6 +780,31 @@ def api_get_sensor_data(node_id):
             
         query = query.order('timestamp', desc=True).limit(limit)
         response = query.execute()
+        
+        # Apply reference values if enabled
+        instrument_id = NODE_TO_INSTRUMENT_ID.get(node_id)
+        if instrument_id:
+            reference_resp = supabase.table('reference_values').select('*').eq('instrument_id', instrument_id).execute()
+            reference_values = reference_resp.data[0] if reference_resp.data else None
+            
+            if reference_values and reference_values.get('enabled', False):
+                # Apply reference values to sensor data
+                ref_x = reference_values.get('reference_x_value', 0) or 0
+                ref_y = reference_values.get('reference_y_value', 0) or 0
+                ref_z = reference_values.get('reference_z_value', 0) or 0
+                
+                calibrated_data = []
+                for reading in response.data:
+                    calibrated_reading = reading.copy()
+                    if reading.get('x_value') is not None:
+                        calibrated_reading['x_value'] = reading['x_value'] - ref_x
+                    if reading.get('y_value') is not None:
+                        calibrated_reading['y_value'] = reading['y_value'] - ref_y
+                    if reading.get('z_value') is not None:
+                        calibrated_reading['z_value'] = reading['z_value'] - ref_z
+                    calibrated_data.append(calibrated_reading)
+                
+                return jsonify(calibrated_data)
         
         return jsonify(response.data)
     except Exception as e:
