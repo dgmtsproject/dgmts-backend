@@ -473,49 +473,25 @@ def check_and_send_tiltmeter_alerts():
             if reference_values and reference_values.get('enabled', False):
                 # Use reference values when enabled
                 print(f"Using reference values for {instrument_id}")
-                # For reference values, we need to calculate calibrated thresholds
-                # Get the reference values
-                ref_x = reference_values.get('reference_x_value', 0)
-                ref_y = reference_values.get('reference_y_value', 0)
-                ref_z = reference_values.get('reference_z_value', 0)
-                
-                # Get base thresholds from instruments table
-                base_xyz_alert_values = instrument.get('x_y_z_alert_values')
-                base_xyz_warning_values = instrument.get('x_y_z_warning_values')
-                base_xyz_shutdown_values = instrument.get('x_y_z_shutdown_values')
-                
-                # Calculate calibrated thresholds by adding reference values
-                if base_xyz_alert_values:
-                    xyz_alert_values = {
-                        'x': base_xyz_alert_values.get('x', 0) + ref_x if base_xyz_alert_values.get('x') else None,
-                        'y': base_xyz_alert_values.get('y', 0) + ref_y if base_xyz_alert_values.get('y') else None,
-                        'z': base_xyz_alert_values.get('z', 0) + ref_z if base_xyz_alert_values.get('z') else None
-                    }
+                # When reference values are enabled, we'll use calibrated values (raw - reference)
+                # and compare against original thresholds in the comparison logic
+                # For tiltmeters, use ONLY XYZ values
+                if instrument_id in ['TILT-142939', 'TILT-143969']:
+                    xyz_alert_values = instrument.get('x_y_z_alert_values')
+                    xyz_warning_values = instrument.get('x_y_z_warning_values')
+                    xyz_shutdown_values = instrument.get('x_y_z_shutdown_values')
+                    # Tiltmeters should not use single values
+                    alert_value = None
+                    warning_value = None
+                    shutdown_value = None
                 else:
+                    # For non-tiltmeters, use ONLY single values
                     xyz_alert_values = None
-                    
-                if base_xyz_warning_values:
-                    xyz_warning_values = {
-                        'x': base_xyz_warning_values.get('x', 0) + ref_x if base_xyz_warning_values.get('x') else None,
-                        'y': base_xyz_warning_values.get('y', 0) + ref_y if base_xyz_warning_values.get('y') else None,
-                        'z': base_xyz_warning_values.get('z', 0) + ref_z if base_xyz_warning_values.get('z') else None
-                    }
-                else:
                     xyz_warning_values = None
-                    
-                if base_xyz_shutdown_values:
-                    xyz_shutdown_values = {
-                        'x': base_xyz_shutdown_values.get('x', 0) + ref_x if base_xyz_shutdown_values.get('x') else None,
-                        'y': base_xyz_shutdown_values.get('y', 0) + ref_y if base_xyz_shutdown_values.get('y') else None,
-                        'z': base_xyz_shutdown_values.get('z', 0) + ref_z if base_xyz_shutdown_values.get('z') else None
-                    }
-                else:
                     xyz_shutdown_values = None
-                
-                # Tiltmeters should not use single values
-                alert_value = None
-                warning_value = None
-                shutdown_value = None
+                    alert_value = instrument.get('alert_value')
+                    warning_value = instrument.get('warning_value')
+                    shutdown_value = instrument.get('shutdown_value')
             else:
                 # Use original instrument values when reference values are not enabled
                 print(f"Using original instrument values for {instrument_id}")
@@ -579,32 +555,78 @@ def check_and_send_tiltmeter_alerts():
                     formatted_time = timestamp
 
                 messages = []
-                # Check shutdown thresholds
-                for axis, value, axis_key in [('X', x, 'x'), ('Y', y, 'y'), ('Z', z, 'z')]:
-                    if value is None:
-                        continue
-                    # For tiltmeters, use ONLY XYZ-specific values
-                    axis_shutdown_value = xyz_shutdown_values.get(axis_key) if xyz_shutdown_values else None
-                    if axis_shutdown_value and abs(value) >= axis_shutdown_value:
-                        messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
                 
-                # Check warning thresholds
-                for axis, value, axis_key in [('X', x, 'x'), ('Y', y, 'y'), ('Z', z, 'z')]:
-                    if value is None:
-                        continue
-                    # For tiltmeters, use ONLY XYZ-specific values
-                    axis_warning_value = xyz_warning_values.get(axis_key) if xyz_warning_values else None
-                    if axis_warning_value and abs(value) >= axis_warning_value:
-                        messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
-                
-                # Check alert thresholds
-                for axis, value, axis_key in [('X', x, 'x'), ('Y', y, 'y'), ('Z', z, 'z')]:
-                    if value is None:
-                        continue
-                    # For tiltmeters, use ONLY XYZ-specific values
-                    axis_alert_value = xyz_alert_values.get(axis_key) if xyz_alert_values else None
-                    if axis_alert_value and abs(value) >= axis_alert_value:
-                        messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
+                # Calculate calibrated values when reference values are enabled
+                if reference_values and reference_values.get('enabled', False):
+                    ref_x = reference_values.get('reference_x_value', 0)
+                    ref_y = reference_values.get('reference_y_value', 0)
+                    ref_z = reference_values.get('reference_z_value', 0)
+                    
+                    # Calculate calibrated values (raw - reference) to match frontend logic
+                    calibrated_x = x - ref_x if x is not None else None
+                    calibrated_y = y - ref_y if y is not None else None
+                    calibrated_z = z - ref_z if z is not None else None
+                    
+                    print(f"Reference values enabled for {instrument_id}: X={ref_x}, Y={ref_y}, Z={ref_z}")
+                    print(f"Raw values: X={x}, Y={y}, Z={z}")
+                    print(f"Calibrated values: X={calibrated_x}, Y={calibrated_y}, Z={calibrated_z}")
+                    
+                    # Use original (unadjusted) thresholds for comparison
+                    base_xyz_alert_values = instrument.get('x_y_z_alert_values')
+                    base_xyz_warning_values = instrument.get('x_y_z_warning_values')
+                    base_xyz_shutdown_values = instrument.get('x_y_z_shutdown_values')
+                    
+                    # Check shutdown thresholds using calibrated values
+                    for axis, calibrated_value, axis_key in [('X', calibrated_x, 'x'), ('Y', calibrated_y, 'y'), ('Z', calibrated_z, 'z')]:
+                        if calibrated_value is None:
+                            continue
+                        axis_shutdown_value = base_xyz_shutdown_values.get(axis_key) if base_xyz_shutdown_values else None
+                        if axis_shutdown_value and abs(calibrated_value) >= axis_shutdown_value:
+                            messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> Calibrated value {calibrated_value:.6f} (Raw: {x if axis == 'X' else y if axis == 'Y' else z:.6f}) at {formatted_time}")
+                    
+                    # Check warning thresholds using calibrated values
+                    for axis, calibrated_value, axis_key in [('X', calibrated_x, 'x'), ('Y', calibrated_y, 'y'), ('Z', calibrated_z, 'z')]:
+                        if calibrated_value is None:
+                            continue
+                        axis_warning_value = base_xyz_warning_values.get(axis_key) if base_xyz_warning_values else None
+                        if axis_warning_value and abs(calibrated_value) >= axis_warning_value:
+                            messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> Calibrated value {calibrated_value:.6f} (Raw: {x if axis == 'X' else y if axis == 'Y' else z:.6f}) at {formatted_time}")
+                    
+                    # Check alert thresholds using calibrated values
+                    for axis, calibrated_value, axis_key in [('X', calibrated_x, 'x'), ('Y', calibrated_y, 'y'), ('Z', calibrated_z, 'z')]:
+                        if calibrated_value is None:
+                            continue
+                        axis_alert_value = base_xyz_alert_values.get(axis_key) if base_xyz_alert_values else None
+                        if axis_alert_value and abs(calibrated_value) >= axis_alert_value:
+                            messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> Calibrated value {calibrated_value:.6f} (Raw: {x if axis == 'X' else y if axis == 'Y' else z:.6f}) at {formatted_time}")
+                else:
+                    # Use original logic when reference values are not enabled
+                    # Check shutdown thresholds
+                    for axis, value, axis_key in [('X', x, 'x'), ('Y', y, 'y'), ('Z', z, 'z')]:
+                        if value is None:
+                            continue
+                        # For tiltmeters, use ONLY XYZ-specific values
+                        axis_shutdown_value = xyz_shutdown_values.get(axis_key) if xyz_shutdown_values else None
+                        if axis_shutdown_value and abs(value) >= axis_shutdown_value:
+                            messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
+                    
+                    # Check warning thresholds
+                    for axis, value, axis_key in [('X', x, 'x'), ('Y', y, 'y'), ('Z', z, 'z')]:
+                        if value is None:
+                            continue
+                        # For tiltmeters, use ONLY XYZ-specific values
+                        axis_warning_value = xyz_warning_values.get(axis_key) if xyz_warning_values else None
+                        if axis_warning_value and abs(value) >= axis_warning_value:
+                            messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
+                    
+                    # Check alert thresholds
+                    for axis, value, axis_key in [('X', x, 'x'), ('Y', y, 'y'), ('Z', z, 'z')]:
+                        if value is None:
+                            continue
+                        # For tiltmeters, use ONLY XYZ-specific values
+                        axis_alert_value = xyz_alert_values.get(axis_key) if xyz_alert_values else None
+                        if axis_alert_value and abs(value) >= axis_alert_value:
+                            messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value} at {formatted_time}")
 
                 if messages:
                     node_messages.append(f"<u><b>Timestamp: {formatted_time}</b></u><br>" + "<br>".join(messages))
