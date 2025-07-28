@@ -537,8 +537,7 @@ def test_tiltmeter_alert():
                     <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
                         <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
                         <p style="margin: 5px 0 0 0; color: #495057;">
-                            Please review the tiltmeter data and take appropriate action if necessary. 
-                            You can access the monitoring dashboard for detailed analysis.
+                            Please review the tiltmeter data and take appropriate action if necessary.                    
                         </p>
                     </div>
                 </div>
@@ -994,7 +993,6 @@ def check_and_send_tiltmeter_alerts():
                             <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
                             <p style="margin: 5px 0 0 0; color: #495057;">
                                 Please review the tiltmeter data and take appropriate action if necessary. 
-                                You can access the monitoring dashboard for detailed analysis.
                             </p>
                         </div>
                     </div>
