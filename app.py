@@ -1037,7 +1037,7 @@ def check_and_send_tiltmeter_alerts():
         print(f"Error in check_and_send_tiltmeter_alerts: {e}")
 
 def check_and_send_seismograph_alert():
-    print("Checking seismograph alerts...")
+    print("Checking seismograph alerts using background API...")
     try:
         # 1. Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG1').execute()
@@ -1047,9 +1047,6 @@ def check_and_send_seismograph_alert():
             return
 
         # For seismograph, use ONLY single values (not a tiltmeter)
-        xyz_alert_values = None
-        xyz_warning_values = None
-        xyz_shutdown_values = None
         alert_value = instrument.get('alert_value')
         warning_value = instrument.get('warning_value')
         shutdown_value = instrument.get('shutdown_value')
@@ -1058,93 +1055,259 @@ def check_and_send_seismograph_alert():
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
 
-        # 2. Fetch latest event from Syscom API
+        # 2. Calculate time range for the last hour in EST
+        est = pytz.timezone('US/Eastern')
+        now_est = datetime.now(est)
+        one_hour_ago_est = now_est - timedelta(hours=1)
+        
+        # Format dates for API
+        start_time = one_hour_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
+        
+        print(f"Fetching seismograph data from {start_time} to {end_time} EST")
+
+        # 3. Fetch background data from Syscom API
         api_key = os.environ.get('SYSCOM_API_KEY')
         if not api_key:
             print("No SYSCOM_API_KEY set in environment")
             return
 
-        url = "https://scs.syscom-instruments.com/public-api/v1/records/events/latest"
+        url = f"https://scs.syscom-instruments.com/public-api/v1/records/background/15092/data?start={start_time}&end={end_time}"
         headers = {"x-scs-api-key": api_key}
         response = requests.get(url, headers=headers)
         if response.status_code != 200:
-            print(f"Failed to fetch latest event: {response.status_code} {response.text}")
+            print(f"Failed to fetch background data: {response.status_code} {response.text}")
             return
 
-        event = response.json()
-        trigger_time = event.get('triggerTime')
-        peakX = event.get('peakX')
-        peakY = event.get('peakY')
-        peakZ = event.get('peakZ')
-        event_id = event.get('id')
-        node_id = 15092  # Seismograph device
-
-        if not trigger_time or peakX is None or peakY is None or peakZ is None:
-            print("Incomplete event data, skipping.")
-            return
-
-        # 3. Check if we've already sent for this triggerTime
-        already_sent = supabase.table('sent_alerts') \
-            .select('id') \
-            .eq('instrument_id', 'SMG1') \
-            .eq('node_id', node_id) \
-            .eq('timestamp', trigger_time) \
-            .execute()
-        if already_sent.data:
-            print(f"Alert already sent for event at {trigger_time}, skipping.")
-            return
-
-        # 4. Compare to thresholds
-        messages = []
-        # Check shutdown thresholds
-        for axis, value, axis_key in [('X', peakX, 'x'), ('Y', peakY, 'y'), ('Z', peakZ, 'z')]:
-            # For seismograph, use ONLY single values
-            axis_shutdown_value = shutdown_value
-            if axis_shutdown_value and abs(value) >= axis_shutdown_value:
-                messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value}")
+        data = response.json()
+        background_data = data.get('data', [])
         
-        # Check warning thresholds
-        for axis, value, axis_key in [('X', peakX, 'x'), ('Y', peakY, 'y'), ('Z', peakZ, 'z')]:
-            # For seismograph, use ONLY single values
-            axis_warning_value = warning_value
-            if axis_warning_value and abs(value) >= axis_warning_value:
-                messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value}")
-        
-        # Check alert thresholds
-        for axis, value, axis_key in [('X', peakX, 'x'), ('Y', peakY, 'y'), ('Z', peakZ, 'z')]:
-            # For seismograph, use ONLY single values
-            axis_alert_value = alert_value
-            if axis_alert_value and abs(value) >= axis_alert_value:
-                messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value}")
+        if not background_data:
+            print("No background data received for the last hour")
+            return
 
-        if messages:
-            # Format trigger_time to EST
+        print(f"Received {len(background_data)} data points")
+
+        # 4. Group data by hour and find highest values for each axis
+        hourly_data = {}
+        for entry in background_data:
+            timestamp = entry[0]  # Format: "2025-08-01T15:40:37.741-04:00"
+            x_value = float(entry[1])
+            y_value = float(entry[2])
+            z_value = float(entry[3])
+            
+            # Extract hour key (YYYY-MM-DD-HH)
             try:
-                dt_utc = datetime.fromisoformat(trigger_time.replace('Z', '+00:00'))
-                est = pytz.timezone('US/Eastern')
-                dt_est = dt_utc.astimezone(est)
-                formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                dt_est = dt.astimezone(est)
+                hour_key = dt_est.strftime('%Y-%m-%d-%H')
             except Exception as e:
-                print(f"Failed to parse/convert trigger_time: {trigger_time}, error: {e}")
-                formatted_time = trigger_time
+                print(f"Failed to parse timestamp {timestamp}: {e}")
+                continue
+            
+            if hour_key not in hourly_data:
+                hourly_data[hour_key] = {
+                    'max_x': x_value,
+                    'max_y': y_value,
+                    'max_z': z_value,
+                    'timestamp': timestamp
+                }
+            else:
+                hourly_data[hour_key]['max_x'] = max(hourly_data[hour_key]['max_x'], abs(x_value))
+                hourly_data[hour_key]['max_y'] = max(hourly_data[hour_key]['max_y'], abs(y_value))
+                hourly_data[hour_key]['max_z'] = max(hourly_data[hour_key]['max_z'], abs(z_value))
 
-            subject = f"Seismograph Alert(s) at {formatted_time}"
-            body = f"<u><b>Event ID: {event_id}</b></u><br><b>Timestamp:</b> {formatted_time}<br>" + "<br>".join(messages)
+        # 5. Check thresholds for each hour
+        alerts_by_hour = {}
+        for hour_key, hour_data in hourly_data.items():
+            max_x = hour_data['max_x']
+            max_y = hour_data['max_y']
+            max_z = hour_data['max_z']
+            timestamp = hour_data['timestamp']
+            
+            # Check if we've already sent for this hour
+            already_sent = supabase.table('sent_alerts') \
+                .select('id') \
+                .eq('instrument_id', 'SMG1') \
+                .eq('node_id', 15092) \
+                .eq('timestamp', timestamp) \
+                .execute()
+            if already_sent.data:
+                print(f"Alert already sent for hour {hour_key}, skipping.")
+                continue
+
+            messages = []
+            
+            # Check shutdown thresholds
+            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+                if shutdown_value and value >= shutdown_value:
+                    messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value:.6f}")
+            
+            # Check warning thresholds
+            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+                if warning_value and value >= warning_value:
+                    messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value:.6f}")
+            
+            # Check alert thresholds
+            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+                if alert_value and value >= alert_value:
+                    messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value:.6f}")
+
+            if messages:
+                alerts_by_hour[hour_key] = {
+                    'messages': messages,
+                    'timestamp': timestamp,
+                    'max_values': {'X': max_x, 'Y': max_y, 'Z': max_z}
+                }
+
+        # 6. Send email if there are alerts
+        if alerts_by_hour:
+            # Create email body with professional styling similar to tiltmeter
+            body = """
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+                    .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }
+                    .header { background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }
+                    .header h1 { margin: 0; font-size: 24px; font-weight: bold; }
+                    .header p { margin: 5px 0 0 0; opacity: 0.9; }
+                    .content { padding: 30px; }
+                    .alert-section { margin-bottom: 25px; }
+                    .alert-section h3 { color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }
+                    .alert-item { background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+                    .alert-item.warning { border-left-color: #ffc107; }
+                    .alert-item.alert { border-left-color: #fd7e14; }
+                    .alert-item.shutdown { border-left-color: #dc3545; }
+                    .timestamp { font-weight: bold; color: #495057; margin-bottom: 10px; }
+                    .alert-message { color: #212529; line-height: 1.5; }
+                    .max-values { background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }
+                    .max-values table { width: 100%; border-collapse: collapse; }
+                    .max-values th, .max-values td { padding: 8px; text-align: center; border: 1px solid #dee2e6; }
+                    .max-values th { background-color: #f8f9fa; font-weight: bold; }
+                    .footer { background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }
+                    .footer p { margin: 0; }
+                    .company-info { font-weight: bold; color: #0056d2; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>🌊 SEISMOGRAPH ALERT NOTIFICATION</h1>
+                        <p>Dulles Geotechnical Monitoring System</p>
+                    </div>
+                    
+                    <div class="content">
+                        <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
+                            This is an automated alert notification from the DGMTS monitoring system. 
+                            The following seismograph thresholds have been exceeded in the last hour:
+                        </p>
+            """
+            
+            # Add alerts for each hour
+            for hour_key, alert_data in alerts_by_hour.items():
+                # Format timestamp to EST
+                try:
+                    dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
+                    dt_est = dt_utc.astimezone(est)
+                    formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+                except Exception as e:
+                    print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
+                    formatted_time = alert_data['timestamp']
+                
+                body += f"""
+                        <div class="alert-section">
+                            <h3>📊 Hour: {hour_key.replace('-', ' ')} - Seismograph Alerts</h3>
+                """
+                
+                for message in alert_data['messages']:
+                    # Determine alert type for styling
+                    alert_class = "alert-item"
+                    if "Shutdown" in message:
+                        alert_class += " shutdown"
+                    elif "Warning" in message:
+                        alert_class += " warning"
+                    elif "Alert" in message:
+                        alert_class += " alert"
+                    
+                    body += f"""
+                            <div class="{alert_class}">
+                                <div class="timestamp">{formatted_time}</div>
+                                <div class="alert-message">{message}</div>
+                                <div class="max-values">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Axis</th>
+                                                <th>Max Value (in/s)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td>X (Longitudinal)</td>
+                                                <td>{alert_data['max_values']['X']:.6f}</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Y (Vertical)</td>
+                                                <td>{alert_data['max_values']['Y']:.6f}</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Z (Transverse)</td>
+                                                <td>{alert_data['max_values']['Z']:.6f}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                    """
+                
+                body += """
+                        </div>
+                """
+            
+            body += """
+                        <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
+                            <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
+                            <p style="margin: 5px 0 0 0; color: #495057;">
+                                Please review the seismograph data and take appropriate action if necessary. 
+                                Values shown are the maximum readings for each axis during the specified hour.
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="footer">
+                        <p><span class="company-info">Dulles Geotechnical</span> | Instrumentation Monitoring System</p>
+                        <p style="font-size: 12px; margin-top: 5px;">
+                            This is an automated message. Please do not reply to this email.
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            
+            current_time = datetime.now(timezone.utc)
+            current_time_est = current_time.astimezone(est)
+            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            subject = f"🌊 Seismograph Alert Notification - {formatted_time}"
+            
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
             if all_emails:
                 send_email(",".join(all_emails), subject, body)
-                print(f"Sent seismograph alert email for event at {trigger_time}")
-                # Record that we've sent for this event
-                supabase.table('sent_alerts').insert({
-                    'instrument_id': 'SMG1',
-                    'node_id': node_id,
-                    'timestamp': trigger_time,
-                    'alert_type': 'any'
-                }).execute()
+                print(f"Sent seismograph alert email for {len(alerts_by_hour)} hours with alerts")
+                
+                # Record that we've sent for each hour
+                for hour_key, alert_data in alerts_by_hour.items():
+                    supabase.table('sent_alerts').insert({
+                        'instrument_id': 'SMG1',
+                        'node_id': 15092,
+                        'timestamp': alert_data['timestamp'],
+                        'alert_type': 'any'
+                    }).execute()
             else:
                 print("No alert/warning/shutdown emails configured for SMG1")
         else:
-            print("No thresholds crossed for latest event.")
+            print("No thresholds crossed for any hour in the last hour.")
     except Exception as e:
         print(f"Error in check_and_send_seismograph_alert: {e}")
 
