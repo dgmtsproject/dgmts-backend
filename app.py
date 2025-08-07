@@ -574,6 +574,170 @@ def test_tiltmeter_alert():
     except Exception as e:
         return jsonify({"error": f"Failed to send tiltmeter alert: {str(e)}"}), 500
 
+@app.route('/api/test-seismograph-alert', methods=['POST'])
+def test_seismograph_alert():
+    """Test endpoint to send a sample seismograph alert email"""
+    try:
+        # Get email addresses from request body
+        data = request.get_json() or {}
+        test_emails = data.get('emails', ['mahmerraza19@gmail.com'])
+        seismograph_type = data.get('type', 'SMG1')  # SMG1 or SMG-3
+        
+        # Ensure test_emails is a list
+        if isinstance(test_emails, str):
+            test_emails = [email.strip() for email in test_emails.split(',') if email.strip()]
+        elif not isinstance(test_emails, list):
+            test_emails = ['mahmerraza19@gmail.com']
+        
+        # Get instrument settings
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', seismograph_type).execute()
+        instrument = instrument_resp.data[0] if instrument_resp.data else None
+        if not instrument:
+            return jsonify({"error": f"No instrument found for {seismograph_type}"}), 404
+        
+        # Create test alert data
+        test_alerts = {
+            'test_hour': {
+                'messages': [
+                    "<b>Test Alert threshold reached on X-axis:</b> 0.001234",
+                    "<b>Test Warning threshold reached on Y-axis:</b> 0.002345",
+                    "<b>Test Shutdown threshold reached on Z-axis:</b> 0.003456"
+                ],
+                'timestamp': datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d %I:%M %p EST'),
+                'max_values': {'X': 0.001234, 'Y': 0.002345, 'Z': 0.003456}
+            }
+        }
+        
+        # Create email body
+        seismograph_name = "ANC DAR-BC Seismograph" if seismograph_type == "SMG-3" else "Seismograph"
+        body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }}
+                .container {{ max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }}
+                .header {{ background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }}
+                .header h1 {{ margin: 0; font-size: 24px; font-weight: bold; }}
+                .header p {{ margin: 5px 0 0 0; opacity: 0.9; }}
+                .content {{ padding: 30px; }}
+                .alert-section {{ margin-bottom: 25px; }}
+                .alert-section h3 {{ color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }}
+                .alert-item {{ background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }}
+                .alert-item.warning {{ border-left-color: #ffc107; }}
+                .alert-item.alert {{ border-left-color: #fd7e14; }}
+                .alert-item.shutdown {{ border-left-color: #dc3545; }}
+                .timestamp {{ font-weight: bold; color: #495057; margin-bottom: 10px; }}
+                .alert-message {{ color: #212529; line-height: 1.5; }}
+                .max-values {{ background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }}
+                .max-values table {{ width: 100%; border-collapse: collapse; }}
+                .max-values th, .max-values td {{ padding: 8px; text-align: center; border: 1px solid #dee2e6; }}
+                .max-values th {{ background-color: #f8f9fa; font-weight: bold; }}
+                .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }}
+                .footer p {{ margin: 0; }}
+                .company-info {{ font-weight: bold; color: #0056d2; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🌊 {seismograph_name.upper()} ALERT NOTIFICATION</h1>
+                    <p>Dulles Geotechnical Monitoring System</p>
+                </div>
+                
+                <div class="content">
+                    <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
+                        This is a <strong>TEST</strong> alert notification from the DGMTS monitoring system. 
+                        The following {seismograph_name} ({seismograph_type}) thresholds have been exceeded:
+                    </p>
+        """
+        
+        # Add alerts for each hour
+        for hour_key, alert_data in test_alerts.items():
+            body += f"""
+                    <div class="alert-section">
+                        <h3>📊 Hour: {hour_key.replace('_', ' ').title()} - {seismograph_name} Alerts</h3>
+            """
+            
+            for message in alert_data['messages']:
+                # Determine alert type for styling
+                alert_class = "alert-item"
+                if "Shutdown" in message:
+                    alert_class += " shutdown"
+                elif "Warning" in message:
+                    alert_class += " warning"
+                elif "Alert" in message:
+                    alert_class += " alert"
+                
+                body += f"""
+                        <div class="{alert_class}">
+                            <div class="timestamp">{alert_data['timestamp']}</div>
+                            <div class="alert-message">{message}</div>
+                            <div class="max-values">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Axis</th>
+                                            <th>Max Value (in/s)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>X (Longitudinal)</td>
+                                            <td>{alert_data['max_values']['X']:.6f}</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Y (Vertical)</td>
+                                            <td>{alert_data['max_values']['Y']:.6f}</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Z (Transverse)</td>
+                                            <td>{alert_data['max_values']['Z']:.6f}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                """
+            
+            body += """
+                    </div>
+            """
+        
+        body += f"""
+                    <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
+                        <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
+                        <p style="margin: 5px 0 0 0; color: #495057;">
+                            Please review the {seismograph_name} data and take appropriate action if necessary. 
+                            This is a test email to verify the alert system is working correctly.
+                        </p>
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <p><span class="company-info">Dulles Geotechnical</span> | Instrumentation Monitoring System</p>
+                    <p style="font-size: 12px; margin-top: 5px;">
+                        This is a test message. Please do not reply to this email.
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        current_time = datetime.now(timezone.utc)
+        current_time_est = current_time.astimezone(pytz.timezone('US/Eastern'))
+        formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+        subject = f"🌊 {seismograph_name} Test Alert Notification - {formatted_time}"
+        
+        if send_email(test_emails, subject, body):
+            return jsonify({"message": f"Test {seismograph_name} alert email sent successfully"})
+        else:
+            return jsonify({"error": f"Failed to send test {seismograph_name} alert email"}), 500
+            
+    except Exception as e:
+        print(f"Error in test_seismograph_alert: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/reset-password', methods=['POST'])
 def reset_password():
     data = request.get_json()
@@ -935,6 +1099,10 @@ def check_and_send_tiltmeter_alerts():
                     .alert-item.shutdown { border-left-color: #dc3545; }
                     .timestamp { font-weight: bold; color: #495057; margin-bottom: 10px; }
                     .alert-message { color: #212529; line-height: 1.5; }
+                    .max-values { background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }
+                    .max-values table { width: 100%; border-collapse: collapse; }
+                    .max-values th, .max-values td { padding: 8px; text-align: center; border: 1px solid #dee2e6; }
+                    .max-values th { background-color: #f8f9fa; font-weight: bold; }
                     .footer { background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }
                     .footer p { margin: 0; }
                     .company-info { font-weight: bold; color: #0056d2; }
@@ -1311,6 +1479,281 @@ def check_and_send_seismograph_alert():
     except Exception as e:
         print(f"Error in check_and_send_seismograph_alert: {e}")
 
+def check_and_send_smg3_seismograph_alert():
+    print("Checking SMG-3 seismograph alerts using background API...")
+    try:
+        # 1. Get instrument settings
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG-3').execute()
+        instrument = instrument_resp.data[0] if instrument_resp.data else None
+        if not instrument:
+            print("No instrument found for SMG-3")
+            return
+
+        # For seismograph, use ONLY single values (not a tiltmeter)
+        alert_value = instrument.get('alert_value')
+        warning_value = instrument.get('warning_value')
+        shutdown_value = instrument.get('shutdown_value')
+        
+        alert_emails = instrument.get('alert_emails') or []
+        warning_emails = instrument.get('warning_emails') or []
+        shutdown_emails = instrument.get('shutdown_emails') or []
+
+        # 2. Calculate time range for the last hour in EST
+        est = pytz.timezone('US/Eastern')
+        now_est = datetime.now(est)
+        one_hour_ago_est = now_est - timedelta(hours=1)
+        
+        # Format dates for API
+        start_time = one_hour_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
+        
+        print(f"Fetching SMG-3 seismograph data from {start_time} to {end_time} EST")
+
+        # 3. Fetch background data from Syscom API
+        api_key = os.environ.get('SYSCOM_API_KEY')
+        if not api_key:
+            print("No SYSCOM_API_KEY set in environment")
+            return
+
+        url = f"https://scs.syscom-instruments.com/public-api/v1/records/background/13453/data?start={start_time}&end={end_time}"
+        headers = {"x-scs-api-key": api_key}
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            print(f"Failed to fetch SMG-3 background data: {response.status_code} {response.text}")
+            return
+
+        data = response.json()
+        background_data = data.get('data', [])
+        
+        if not background_data:
+            print("No SMG-3 background data received for the last hour")
+            return
+
+        print(f"Received {len(background_data)} SMG-3 data points")
+
+        # 4. Group data by hour and find highest values for each axis
+        hourly_data = {}
+        for entry in background_data:
+            timestamp = entry[0]  # Format: "2025-08-01T15:40:37.741-04:00"
+            x_value = float(entry[1])
+            y_value = float(entry[2])
+            z_value = float(entry[3])
+            
+            # Extract hour key (YYYY-MM-DD-HH)
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                dt_est = dt.astimezone(est)
+                hour_key = dt_est.strftime('%Y-%m-%d-%H')
+            except Exception as e:
+                print(f"Failed to parse timestamp {timestamp}: {e}")
+                continue
+            
+            if hour_key not in hourly_data:
+                hourly_data[hour_key] = {
+                    'max_x': x_value,
+                    'max_y': y_value,
+                    'max_z': z_value,
+                    'timestamp': timestamp
+                }
+            else:
+                hourly_data[hour_key]['max_x'] = max(hourly_data[hour_key]['max_x'], abs(x_value))
+                hourly_data[hour_key]['max_y'] = max(hourly_data[hour_key]['max_y'], abs(y_value))
+                hourly_data[hour_key]['max_z'] = max(hourly_data[hour_key]['max_z'], abs(z_value))
+
+        # 5. Check thresholds for each hour
+        alerts_by_hour = {}
+        for hour_key, hour_data in hourly_data.items():
+            max_x = hour_data['max_x']
+            max_y = hour_data['max_y']
+            max_z = hour_data['max_z']
+            timestamp = hour_data['timestamp']
+            
+            # Check if we've already sent for this hour
+            already_sent = supabase.table('sent_alerts') \
+                .select('id') \
+                .eq('instrument_id', 'SMG-3') \
+                .eq('node_id', 13453) \
+                .eq('timestamp', timestamp) \
+                .execute()
+            if already_sent.data:
+                print(f"SMG-3 alert already sent for hour {hour_key}, skipping.")
+                continue
+
+            messages = []
+            
+            # Check shutdown thresholds
+            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+                if shutdown_value and value >= shutdown_value:
+                    messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value:.6f}")
+            
+            # Check warning thresholds
+            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+                if warning_value and value >= warning_value:
+                    messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value:.6f}")
+            
+            # Check alert thresholds
+            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+                if alert_value and value >= alert_value:
+                    messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value:.6f}")
+
+            if messages:
+                alerts_by_hour[hour_key] = {
+                    'messages': messages,
+                    'timestamp': timestamp,
+                    'max_values': {'X': max_x, 'Y': max_y, 'Z': max_z}
+                }
+
+        # 6. Send email if there are alerts
+        if alerts_by_hour:
+            # Create email body with professional styling similar to tiltmeter
+            body = """
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+                    .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }
+                    .header { background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }
+                    .header h1 { margin: 0; font-size: 24px; font-weight: bold; }
+                    .header p { margin: 5px 0 0 0; opacity: 0.9; }
+                    .content { padding: 30px; }
+                    .alert-section { margin-bottom: 25px; }
+                    .alert-section h3 { color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }
+                    .alert-item { background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+                    .alert-item.warning { border-left-color: #ffc107; }
+                    .alert-item.alert { border-left-color: #fd7e14; }
+                    .alert-item.shutdown { border-left-color: #dc3545; }
+                    .timestamp { font-weight: bold; color: #495057; margin-bottom: 10px; }
+                    .alert-message { color: #212529; line-height: 1.5; }
+                    .max-values { background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }
+                    .max-values table { width: 100%; border-collapse: collapse; }
+                    .max-values th, .max-values td { padding: 8px; text-align: center; border: 1px solid #dee2e6; }
+                    .max-values th { background-color: #f8f9fa; font-weight: bold; }
+                    .footer { background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }
+                    .footer p { margin: 0; }
+                    .company-info { font-weight: bold; color: #0056d2; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>🌊 ANC DAR-BC SEISMOGRAPH ALERT NOTIFICATION</h1>
+                        <p>Dulles Geotechnical Monitoring System</p>
+                    </div>
+                    
+                    <div class="content">
+                        <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
+                            This is an automated alert notification from the DGMTS monitoring system. 
+                            The following ANC DAR-BC Seismograph (SMG-3) thresholds have been exceeded in the last hour:
+                        </p>
+            """
+            
+            # Add alerts for each hour
+            for hour_key, alert_data in alerts_by_hour.items():
+                # Format timestamp to EST
+                try:
+                    dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
+                    dt_est = dt_utc.astimezone(est)
+                    formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+                except Exception as e:
+                    print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
+                    formatted_time = alert_data['timestamp']
+                
+                body += f"""
+                        <div class="alert-section">
+                            <h3>📊 Hour: {hour_key.replace('-', ' ')} - ANC DAR-BC Seismograph Alerts</h3>
+                """
+                
+                for message in alert_data['messages']:
+                    # Determine alert type for styling
+                    alert_class = "alert-item"
+                    if "Shutdown" in message:
+                        alert_class += " shutdown"
+                    elif "Warning" in message:
+                        alert_class += " warning"
+                    elif "Alert" in message:
+                        alert_class += " alert"
+                    
+                    body += f"""
+                            <div class="{alert_class}">
+                                <div class="timestamp">{formatted_time}</div>
+                                <div class="alert-message">{message}</div>
+                                <div class="max-values">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Axis</th>
+                                                <th>Max Value (in/s)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td>X (Longitudinal)</td>
+                                                <td>{alert_data['max_values']['X']:.6f}</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Y (Vertical)</td>
+                                                <td>{alert_data['max_values']['Y']:.6f}</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Z (Transverse)</td>
+                                                <td>{alert_data['max_values']['Z']:.6f}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                    """
+                
+                body += """
+                        </div>
+                """
+            
+            body += """
+                        <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
+                            <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
+                            <p style="margin: 5px 0 0 0; color: #495057;">
+                                Please review the ANC DAR-BC Seismograph data and take appropriate action if necessary. 
+                                Values shown are the maximum readings for each axis during the specified hour.
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="footer">
+                        <p><span class="company-info">Dulles Geotechnical</span> | Instrumentation Monitoring System</p>
+                        <p style="font-size: 12px; margin-top: 5px;">
+                            This is an automated message. Please do not reply to this email.
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            
+            current_time = datetime.now(timezone.utc)
+            current_time_est = current_time.astimezone(est)
+            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            subject = f"🌊 ANC DAR-BC Seismograph Alert Notification - {formatted_time}"
+            
+            all_emails = set(alert_emails + warning_emails + shutdown_emails)
+            if all_emails:
+                send_email(",".join(all_emails), subject, body)
+                print(f"Sent SMG-3 seismograph alert email for {len(alerts_by_hour)} hours with alerts")
+                
+                # Record that we've sent for each hour
+                for hour_key, alert_data in alerts_by_hour.items():
+                    supabase.table('sent_alerts').insert({
+                        'instrument_id': 'SMG-3',
+                        'node_id': 13453,
+                        'timestamp': alert_data['timestamp'],
+                        'alert_type': 'any'
+                    }).execute()
+            else:
+                print("No alert/warning/shutdown emails configured for SMG-3")
+        else:
+            print("No thresholds crossed for any hour in the last hour for SMG-3.")
+    except Exception as e:
+        print(f"Error in check_and_send_smg3_seismograph_alert: {e}")
+
 # API endpoints for sensor data
 @app.route('/api/sensor-data/<int:node_id>', methods=['GET'])
 def api_get_sensor_data(node_id):
@@ -1378,6 +1821,7 @@ def run_scheduler():
 schedule.every().hour.do(fetch_and_store_all_sensor_data)
 schedule.every().hour.do(check_and_send_tiltmeter_alerts)
 schedule.every().hour.do(check_and_send_seismograph_alert)
+schedule.every().hour.do(check_and_send_smg3_seismograph_alert)
 
 # Start scheduler in background
 scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
