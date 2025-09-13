@@ -16,7 +16,11 @@ def create_app():
     app.config.from_object(Config)
     
     # Configure CORS
-    CORS(app, supports_credentials=True)
+    CORS(app, 
+         supports_credentials=True,
+         origins=['https://dgmts-imsite.dullesgeotechnical.com', 'https://imsite.dullesgeotechnical.com'],
+         allow_headers=['Content-Type', 'Authorization'],
+         methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
     
     # Register blueprints
     app.register_blueprint(auth_bp)
@@ -35,8 +39,13 @@ def create_app():
     return app
 
 def main():
+    """Main function to run the application"""
     app = create_app()
+    
+    # Start scheduler
     start_scheduler()
+    
+    # Run the app
     app.run(host='0.0.0.0', port=5000, debug=True)
 
 if __name__ == "__main__":
