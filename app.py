@@ -17,7 +17,6 @@ app.config.from_object(Config)
 # Configure CORS
 CORS(app, 
      supports_credentials=True,
-     origins=['https://dgmts-imsite.dullesgeotechnical.com', 'https://imsite.dullesgeotechnical.com'],
      allow_headers=['Content-Type', 'Authorization'],
      methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
