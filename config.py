@@ -62,3 +62,6 @@ class Config:
     
     # Reset tokens storage (in production, use Redis or database)
     RESET_TOKENS = {}
+    
+    # FTP Server Files Configuration
+    FTP_SERVER_FILES_PATH = os.getenv('FTP_SERVER_FILES_PATH', 'ftp-server-files')

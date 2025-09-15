@@ -6,5 +6,6 @@ app.log
 passenger_wsgi.py
 /tmp/
 /public/
+/ftp-server-files/
 
 .env
