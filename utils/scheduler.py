@@ -4,6 +4,7 @@ import threading
 from services.sensor_service import fetch_and_store_all_sensor_data
 from services.alert_service import check_and_send_tiltmeter_alerts, check_and_send_seismograph_alert, check_and_send_smg3_seismograph_alert
 from services.rock_seismograph_service import check_and_send_rock_seismograph_alert
+from services.micromate_service import check_and_send_micromate_alert
 from config import Config
 
 def run_scheduler():
@@ -19,6 +20,7 @@ def setup_scheduled_tasks():
     schedule.every().hour.do(check_and_send_tiltmeter_alerts)
     schedule.every().hour.do(check_and_send_seismograph_alert)
     schedule.every().hour.do(check_and_send_smg3_seismograph_alert)
+    schedule.every().hour.do(check_and_send_micromate_alert)
     
     # Schedule Rock Seismograph alerts for each instrument
     for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():

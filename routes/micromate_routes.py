@@ -3,6 +3,7 @@ import json
 import glob
 from flask import Blueprint, jsonify, current_app
 from config import Config
+from services.micromate_service import check_and_send_micromate_alert
 
 micromate_bp = Blueprint('micromate', __name__, url_prefix='/api/micromate')
 
@@ -137,4 +138,22 @@ def list_h_files():
         return jsonify({
             'error': f'Internal server error: {str(e)}',
             'message': 'An unexpected error occurred while listing files'
+        }), 500
+
+@micromate_bp.route('/check-alerts', methods=['POST'])
+def check_micromate_alerts():
+    """
+    Check Instantel Micromate alerts and send emails if thresholds are exceeded.
+    This endpoint triggers the alert checking process.
+    """
+    try:
+        check_and_send_micromate_alert()
+        return jsonify({
+            'message': 'Micromate alert check completed successfully',
+            'status': 'success'
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'error': f'Failed to check Micromate alerts: {str(e)}',
+            'message': 'An error occurred while checking alerts'
         }), 500
