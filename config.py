@@ -25,8 +25,8 @@ class Config:
     # Email Configuration - Using Gmail SMTP
     SMTP_SERVER = 'smtp.gmail.com'
     SMTP_PORT = 465
-    EMAIL_USERNAME = 'dgmts.project@gmail.com'
-    EMAIL_PASSWORD = 'qaegeeqwsuuwtmwb'
+    EMAIL_USERNAME = os.environ['EMAIL_USERNAME']
+    EMAIL_PASSWORD = os.environ['EMAIL_PASSWORD']
     
     # Microsoft 365 configuration (commented out for now)
     # SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.office365.com')
