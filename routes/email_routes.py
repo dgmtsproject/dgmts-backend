@@ -3,7 +3,7 @@ from services.email_service import send_email
 from services.alert_service import check_and_send_tiltmeter_alerts, check_and_send_seismograph_alert, check_and_send_smg3_seismograph_alert
 from supabase import create_client, Client
 from config import Config
-from datetime import datetime
+from datetime import datetime, timezone
 import pytz
 
 # Initialize Supabase client
