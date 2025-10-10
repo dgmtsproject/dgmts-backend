@@ -7,5 +7,5 @@ passenger_wsgi.py
 /tmp/
 /public/
 /ftp-server-files/
-
+CHANGELOG.md
 .env

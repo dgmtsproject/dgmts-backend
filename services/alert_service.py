@@ -71,11 +71,12 @@ def check_and_send_tiltmeter_alerts():
             warning_emails = instrument.get('warning_emails') or []
             shutdown_emails = instrument.get('shutdown_emails') or []
 
-            one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            # Check last 6 hours instead of just 1 hour to catch recent violations
+            six_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
             readings_resp = supabase.table('sensor_readings') \
                 .select('*') \
                 .eq('node_id', node_id) \
-                .gte('timestamp', one_hour_ago) \
+                .gte('timestamp', six_hours_ago) \
                 .order('timestamp', desc=False) \
                 .execute()
             readings = readings_resp.data if readings_resp.data else []
@@ -87,15 +88,19 @@ def check_and_send_tiltmeter_alerts():
                 y = reading.get('y_value')
                 z = reading.get('z_value')
 
-                # Check if we've already sent for this timestamp (use correct instrument_id)
+                # Check if we've already sent for this timestamp within the last 6 hours
+                # This allows re-sending alerts for persistent threshold violations
+                six_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
                 already_sent = supabase.table('sent_alerts') \
-                    .select('id') \
+                    .select('id, created_at') \
                     .eq('instrument_id', instrument_id) \
                     .eq('node_id', node_id) \
                     .eq('timestamp', timestamp) \
+                    .gte('created_at', six_hours_ago) \
                     .execute()
                 if already_sent.data:
-                    print(f"Alert already sent for node {node_id} at {timestamp}, skipping.")
+                    print(f"DEBUG: Alert already sent for node {node_id} at {timestamp} within the last 6 hours, skipping.")
+                    print(f"DEBUG: Found {len(already_sent.data)} existing alert records")
                     continue
 
                 # Format timestamp to EST
@@ -112,9 +117,9 @@ def check_and_send_tiltmeter_alerts():
                 
                 # Calculate calibrated values when reference values are enabled
                 if reference_values and reference_values.get('enabled', False):
-                    ref_x = reference_values.get('reference_x_value', 0)
-                    ref_y = reference_values.get('reference_y_value', 0)
-                    ref_z = reference_values.get('reference_z_value', 0)
+                    ref_x = reference_values.get('reference_x_value') or 0
+                    ref_y = reference_values.get('reference_y_value') or 0
+                    ref_z = reference_values.get('reference_z_value') or 0
                     
                     # Calculate calibrated values (raw - reference) to match frontend logic
                     calibrated_x = x - ref_x if x is not None else None
@@ -183,14 +188,17 @@ def check_and_send_tiltmeter_alerts():
                             messages.append(f"<b>Alert threshold reached on {axis}-axis ({axis_desc}) > {axis_alert_value:.3f}: value- {value:.6f} at {formatted_time}</b>")
 
                 if messages:
+                    print(f"DEBUG: Node {node_id} has {len(messages)} threshold violations at {formatted_time}")
                     node_messages.append(f"<u><b>Timestamp: {formatted_time}</b></u><br>" + "<br>".join(messages))
                     # Record that we've sent for this timestamp (use correct instrument_id)
                     supabase.table('sent_alerts').insert({
                         'instrument_id': instrument_id,
                         'node_id': node_id,
                         'timestamp': timestamp,
-                        'alert_type': 'any'
+                        'alert_type': 'any',
+                        'created_at': datetime.now(timezone.utc).isoformat()
                     }).execute()
+                    print(f"DEBUG: Recorded alert sent for node {node_id} at {timestamp}")
 
             if node_messages:
                 node_alerts[node_id] = node_messages
