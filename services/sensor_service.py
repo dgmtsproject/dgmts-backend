@@ -140,3 +140,22 @@ def get_sensor_data_with_reference_values(node_id, start_time=None, end_time=Non
     except Exception as e:
         print(f"Error getting sensor data: {e}")
         return []
+
+def get_raw_sensor_data(node_id, start_time=None, end_time=None, limit=1000):
+    """Get raw sensor data without reference values applied"""
+    try:
+        query = supabase.table('sensor_readings').select('*').eq('node_id', node_id)
+        
+        if start_time:
+            query = query.gte('timestamp', start_time)
+        if end_time:
+            query = query.lte('timestamp', end_time)
+            
+        query = query.order('timestamp', desc=True).limit(limit)
+        response = query.execute()
+        
+        # Return raw data without any reference value adjustments
+        return response.data
+    except Exception as e:
+        print(f"Error getting raw sensor data: {e}")
+        return []
