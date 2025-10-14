@@ -9,6 +9,36 @@ from .email_service import send_email
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
+def get_project_info(instrument_id):
+    """Get project information for an instrument from the database"""
+    try:
+        # First get the instrument to find its project_id
+        instrument_resp = supabase.table('instruments').select('project_id').eq('instrument_id', instrument_id).execute()
+        if not instrument_resp.data:
+            print(f"No instrument found for {instrument_id}")
+            return None
+            
+        project_id = instrument_resp.data[0].get('project_id')
+        if not project_id:
+            print(f"No project_id found for instrument {instrument_id}")
+            return None
+            
+        # Get project information from projects table
+        project_resp = supabase.table('projects').select('*').eq('id', project_id).execute()
+        if not project_resp.data:
+            print(f"No project found with id {project_id}")
+            return None
+            
+        project = project_resp.data[0]
+        return {
+            'project_id': project_id,
+            'project_name': project.get('name', 'Unknown Project'),
+            'project_description': project.get('description', '')
+        }
+    except Exception as e:
+        print(f"Error fetching project info for {instrument_id}: {e}")
+        return None
+
 def check_and_send_micromate_alert():
     """Check Instantel Micromate alerts and send emails if thresholds are exceeded"""
     print("Checking Instantel Micromate alerts...")
@@ -146,7 +176,16 @@ def check_and_send_micromate_alert():
 
         # 6. Send email if there are alerts
         if alerts_by_hour:
-            body = _create_micromate_email_body(alerts_by_hour)
+            # Get project information for micromate from database
+            project_name = "Unknown Project"  # Default fallback
+            try:
+                project_info = get_project_info('INSTANTEL-1')
+                if project_info:
+                    project_name = project_info['project_name']
+            except Exception as e:
+                print(f"Error getting project info for INSTANTEL-1: {e}")
+                
+            body = _create_micromate_email_body(alerts_by_hour, project_name)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -173,43 +212,49 @@ def check_and_send_micromate_alert():
     except Exception as e:
         print(f"Error in check_and_send_micromate_alert: {e}")
 
-def _create_micromate_email_body(alerts_by_hour):
+def _create_micromate_email_body(alerts_by_hour, project_name):
     """Create HTML email body for Micromate alerts"""
-    body = """
+    body = f"""
     <html>
     <head>
         <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
-            .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }
-            .header { background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }
-            .header h1 { margin: 0; font-size: 24px; font-weight: bold; }
-            .header p { margin: 5px 0 0 0; opacity: 0.9; }
-            .content { padding: 30px; }
-            .alert-section { margin-bottom: 25px; }
-            .alert-section h3 { color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }
-            .alert-item { background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
-            .alert-item.warning { border-left-color: #ffc107; }
-            .alert-item.alert { border-left-color: #fd7e14; }
-            .alert-item.shutdown { border-left-color: #dc3545; }
-            .timestamp { font-weight: bold; color: #495057; margin-bottom: 10px; }
-            .alert-message { color: #212529; line-height: 1.5; }
-            .max-values { background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }
-            .max-values table { width: 100%; border-collapse: collapse; }
-            .max-values th, .max-values td { padding: 8px; text-align: center; border: 1px solid #dee2e6; }
-            .max-values th { background-color: #f8f9fa; font-weight: bold; }
-            .footer { background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }
-            .footer p { margin: 0; }
-            .company-info { font-weight: bold; color: #0056d2; }
+            body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }}
+            .container {{ max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }}
+            .header {{ background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 24px; font-weight: bold; }}
+            .header p {{ margin: 5px 0 0 0; opacity: 0.9; }}
+            .content {{ padding: 30px; }}
+            .alert-section {{ margin-bottom: 25px; }}
+            .alert-section h3 {{ color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }}
+            .alert-item {{ background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }}
+            .alert-item.warning {{ border-left-color: #ffc107; }}
+            .alert-item.alert {{ border-left-color: #fd7e14; }}
+            .alert-item.shutdown {{ border-left-color: #dc3545; }}
+            .timestamp {{ font-weight: bold; color: #495057; margin-bottom: 10px; }}
+            .alert-message {{ color: #212529; line-height: 1.5; }}
+            .max-values {{ background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }}
+            .max-values table {{ width: 100%; border-collapse: collapse; }}
+            .max-values th, .max-values td {{ padding: 8px; text-align: center; border: 1px solid #dee2e6; }}
+            .max-values th {{ background-color: #f8f9fa; font-weight: bold; }}
+            .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }}
+            .footer p {{ margin: 0; }}
+            .company-info {{ font-weight: bold; color: #0056d2; }}
+            .project-info {{ background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .project-info p {{ margin: 0; color: #0056d2; font-weight: bold; }}
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
                 <h1>📊 INSTANTEL MICROMATE ALERT NOTIFICATION</h1>
-                <p>Dulles Geotechnical Monitoring System</p>
+                <p>Dulles Geotechnical Monitoring System - {project_name}</p>
             </div>
             
             <div class="content">
+                <div class="project-info">
+                    <p>📋 Project: {project_name}</p>
+                </div>
+                
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                     This is an automated alert notification from the DGMTS monitoring system. 
                     The following Instantel Micromate thresholds have been exceeded in the last hour:

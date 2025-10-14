@@ -43,7 +43,7 @@ class Config:
     # Mapping from node_id to instrument_id for tiltmeters
     NODE_TO_INSTRUMENT_ID = {142939: "TILT-142939", 143969: "TILT-143969"}
     
-    # Rock Seismograph Configuration
+    # Rock Seismograph Configuration (keeping for backward compatibility)
     ROCK_SEISMOGRAPH_INSTRUMENTS = {
         'ROCKSMG-1': {
             'name': 'Rock Seismograph',

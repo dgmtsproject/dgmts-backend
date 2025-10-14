@@ -9,6 +9,36 @@ from .email_service import send_email
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
+def get_project_info(instrument_id):
+    """Get project information for an instrument from the database"""
+    try:
+        # First get the instrument to find its project_id
+        instrument_resp = supabase.table('instruments').select('project_id').eq('instrument_id', instrument_id).execute()
+        if not instrument_resp.data:
+            print(f"No instrument found for {instrument_id}")
+            return None
+            
+        project_id = instrument_resp.data[0].get('project_id')
+        if not project_id:
+            print(f"No project_id found for instrument {instrument_id}")
+            return None
+            
+        # Get project information from projects table
+        project_resp = supabase.table('projects').select('*').eq('id', project_id).execute()
+        if not project_resp.data:
+            print(f"No project found with id {project_id}")
+            return None
+            
+        project = project_resp.data[0]
+        return {
+            'project_id': project_id,
+            'project_name': project.get('name', 'Unknown Project'),
+            'project_description': project.get('description', '')
+        }
+    except Exception as e:
+        print(f"Error fetching project info for {instrument_id}: {e}")
+        return None
+
 def check_and_send_tiltmeter_alerts():
     """Check tiltmeter alerts and send emails if thresholds are exceeded"""
     print("Checking tiltmeter alerts for both nodes...")
@@ -204,8 +234,20 @@ def check_and_send_tiltmeter_alerts():
                 node_alerts[node_id] = node_messages
 
         if node_alerts:
+            # Get project information for tiltmeters from database
+            project_name = "ANC DAR-BC"  # Default fallback
+            try:
+                # Get project info from the first instrument (they should all be the same project)
+                first_instrument_id = Config.NODE_TO_INSTRUMENT_ID.get(node_ids[0])
+                if first_instrument_id:
+                    project_info = get_project_info(first_instrument_id)
+                    if project_info:
+                        project_name = project_info['project_name']
+            except Exception as e:
+                print(f"Error getting project info for tiltmeters: {e}")
+            
             # Create email body with professional styling
-            body = _create_tiltmeter_email_body(node_alerts, node_ids)
+            body = _create_tiltmeter_email_body(node_alerts, node_ids, project_name)
             
             current_time = datetime.now(timezone.utc)
             est = pytz.timezone('US/Eastern')
@@ -237,43 +279,49 @@ def check_and_send_tiltmeter_alerts():
     except Exception as e:
         print(f"Error in check_and_send_tiltmeter_alerts: {e}")
 
-def _create_tiltmeter_email_body(node_alerts, node_ids):
+def _create_tiltmeter_email_body(node_alerts, node_ids, project_name):
     """Create HTML email body for tiltmeter alerts"""
-    body = """
+    body = f"""
     <html>
     <head>
         <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
-            .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }
-            .header { background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }
-            .header h1 { margin: 0; font-size: 24px; font-weight: bold; }
-            .header p { margin: 5px 0 0 0; opacity: 0.9; }
-            .content { padding: 30px; }
-            .alert-section { margin-bottom: 25px; }
-            .alert-section h3 { color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }
-            .alert-item { background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
-            .alert-item.warning { border-left-color: #ffc107; }
-            .alert-item.alert { border-left-color: #fd7e14; }
-            .alert-item.shutdown { border-left-color: #dc3545; }
-            .timestamp { font-weight: bold; color: #495057; margin-bottom: 10px; }
-            .alert-message { color: #212529; line-height: 1.5; }
-            .max-values { background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }
-            .max-values table { width: 100%; border-collapse: collapse; }
-            .max-values th, .max-values td { padding: 8px; text-align: center; border: 1px solid #dee2e6; }
-            .max-values th { background-color: #f8f9fa; font-weight: bold; }
-            .footer { background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }
-            .footer p { margin: 0; }
-            .company-info { font-weight: bold; color: #0056d2; }
+            body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }}
+            .container {{ max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }}
+            .header {{ background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 24px; font-weight: bold; }}
+            .header p {{ margin: 5px 0 0 0; opacity: 0.9; }}
+            .content {{ padding: 30px; }}
+            .alert-section {{ margin-bottom: 25px; }}
+            .alert-section h3 {{ color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }}
+            .alert-item {{ background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }}
+            .alert-item.warning {{ border-left-color: #ffc107; }}
+            .alert-item.alert {{ border-left-color: #fd7e14; }}
+            .alert-item.shutdown {{ border-left-color: #dc3545; }}
+            .timestamp {{ font-weight: bold; color: #495057; margin-bottom: 10px; }}
+            .alert-message {{ color: #212529; line-height: 1.5; }}
+            .max-values {{ background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }}
+            .max-values table {{ width: 100%; border-collapse: collapse; }}
+            .max-values th, .max-values td {{ padding: 8px; text-align: center; border: 1px solid #dee2e6; }}
+            .max-values th {{ background-color: #f8f9fa; font-weight: bold; }}
+            .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }}
+            .footer p {{ margin: 0; }}
+            .company-info {{ font-weight: bold; color: #0056d2; }}
+            .project-info {{ background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .project-info p {{ margin: 0; color: #0056d2; font-weight: bold; }}
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
                 <h1>🚨 TILTMETER ALERT NOTIFICATION</h1>
-                <p>Dulles Geotechnical Monitoring System</p>
+                <p>Dulles Geotechnical Monitoring System - {project_name}</p>
             </div>
             
             <div class="content">
+                <div class="project-info">
+                    <p>📋 Project: {project_name}</p>
+                </div>
+                
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                     This is an automated alert notification from the DGMTS monitoring system. 
                     The following tiltmeter thresholds have been exceeded in the last hour:
@@ -463,7 +511,25 @@ def check_and_send_seismograph_alert():
 
         # 6. Send email if there are alerts
         if alerts_by_hour:
-            body = _create_seismograph_email_body(alerts_by_hour, "Seismograph")
+            # Get project information for both SMG1 instruments from database
+            project_names = []
+            try:
+                # Check both SMG1 and SMG-1 instruments
+                for smg_id in ['SMG1', 'SMG-1']:
+                    project_info = get_project_info(smg_id)
+                    if project_info and project_info['project_name']:
+                        if project_info['project_name'] not in project_names:
+                            project_names.append(project_info['project_name'])
+            except Exception as e:
+                print(f"Error getting project info for SMG instruments: {e}")
+            
+            # Use combined project names or fallback
+            if project_names:
+                project_name = " & ".join(project_names)
+            else:
+                project_name = "ANC DAR BC and DGMTS Testing"  # Default fallback
+                
+            body = _create_seismograph_email_body(alerts_by_hour, "Seismograph", project_name)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -617,7 +683,16 @@ def check_and_send_smg3_seismograph_alert():
 
         # 6. Send email if there are alerts
         if alerts_by_hour:
-            body = _create_seismograph_email_body(alerts_by_hour, "ANC DAR-BC Seismograph")
+            # Get project information for SMG-3 seismograph from database
+            project_name = "Unknown Project"  # Default fallback
+            try:
+                project_info = get_project_info('SMG-3')
+                if project_info:
+                    project_name = project_info['project_name']
+            except Exception as e:
+                print(f"Error getting project info for SMG-3: {e}")
+                
+            body = _create_seismograph_email_body(alerts_by_hour, "ANC DAR-BC Seismograph", project_name)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -644,8 +719,14 @@ def check_and_send_smg3_seismograph_alert():
     except Exception as e:
         print(f"Error in check_and_send_smg3_seismograph_alert: {e}")
 
-def _create_seismograph_email_body(alerts_by_hour, seismograph_name):
+def _create_seismograph_email_body(alerts_by_hour, seismograph_name, project_name):
     """Create HTML email body for seismograph alerts"""
+    # Format project name for display
+    if " & " in project_name:
+        project_display = f"Projects: {project_name.replace(' & ', ' & ')}"
+    else:
+        project_display = f"Project: {project_name}"
+        
     body = f"""
     <html>
     <head>
@@ -671,16 +752,22 @@ def _create_seismograph_email_body(alerts_by_hour, seismograph_name):
             .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }}
             .footer p {{ margin: 0; }}
             .company-info {{ font-weight: bold; color: #0056d2; }}
+            .project-info {{ background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .project-info p {{ margin: 0; color: #0056d2; font-weight: bold; }}
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
                 <h1>🌊 {seismograph_name.upper()} ALERT NOTIFICATION</h1>
-                <p>Dulles Geotechnical Monitoring System</p>
+                <p>Dulles Geotechnical Monitoring System - {project_name}</p>
             </div>
             
             <div class="content">
+                <div class="project-info">
+                    <p>📋 {project_display}</p>
+                </div>
+                
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                     This is an automated alert notification from the DGMTS monitoring system. 
                     The following {seismograph_name} thresholds have been exceeded in the last hour:

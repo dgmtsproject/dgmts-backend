@@ -9,6 +9,36 @@ from .email_service import send_email
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
+def get_project_info(instrument_id):
+    """Get project information for an instrument from the database"""
+    try:
+        # First get the instrument to find its project_id
+        instrument_resp = supabase.table('instruments').select('project_id').eq('instrument_id', instrument_id).execute()
+        if not instrument_resp.data:
+            print(f"No instrument found for {instrument_id}")
+            return None
+            
+        project_id = instrument_resp.data[0].get('project_id')
+        if not project_id:
+            print(f"No project_id found for instrument {instrument_id}")
+            return None
+            
+        # Get project information from projects table
+        project_resp = supabase.table('projects').select('*').eq('id', project_id).execute()
+        if not project_resp.data:
+            print(f"No project found with id {project_id}")
+            return None
+            
+        project = project_resp.data[0]
+        return {
+            'project_id': project_id,
+            'project_name': project.get('name', 'Unknown Project'),
+            'project_description': project.get('description', '')
+        }
+    except Exception as e:
+        print(f"Error fetching project info for {instrument_id}: {e}")
+        return None
+
 def check_and_send_rock_seismograph_alert(instrument_id):
     """Check Rock Seismograph alerts and send emails if thresholds are exceeded"""
     print(f"Checking {instrument_id} Rock Seismograph alerts using background API...")
@@ -46,8 +76,20 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             print("No SYSCOM_API_KEY set in environment")
             return
 
-        # Get project ID from config
-        project_id = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['project_id']
+        # Get project ID from database
+        project_id = None
+        try:
+            project_info = get_project_info(instrument_id)
+            if project_info:
+                project_id = project_info['project_id']
+            else:
+                # Fallback to config if database lookup fails
+                project_id = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['project_id']
+        except Exception as e:
+            print(f"Error getting project info for {instrument_id}: {e}")
+            # Fallback to config if database lookup fails
+            project_id = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['project_id']
+            
         url = f"https://scs.syscom-instruments.com/public-api/v1/records/background/{project_id}/data?start={start_time}&end={end_time}"
         headers = {"x-scs-api-key": api_key}
         response = requests.get(url, headers=headers)
@@ -139,7 +181,16 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         # 6. Send email if there are alerts
         if alerts_by_hour:
             seismograph_name = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['name']
-            project_name = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['project_name']
+            
+            # Get project information from database
+            project_name = "Unknown Project"  # Default fallback
+            try:
+                project_info = get_project_info(instrument_id)
+                if project_info:
+                    project_name = project_info['project_name']
+            except Exception as e:
+                print(f"Error getting project info for {instrument_id}: {e}")
+                
             body = _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_id)
             
             current_time = datetime.now(timezone.utc)
