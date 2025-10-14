@@ -10,31 +10,53 @@ from .email_service import send_email
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
 def get_project_info(instrument_id):
-    """Get project information for an instrument from the database"""
+    """Get project information and instrument details for an instrument from the database"""
     try:
-        # First get the instrument to find its project_id
-        instrument_resp = supabase.table('instruments').select('project_id').eq('instrument_id', instrument_id).execute()
+        # Get the instrument with all details including project_id
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
         if not instrument_resp.data:
             print(f"No instrument found for {instrument_id}")
             return None
             
-        project_id = instrument_resp.data[0].get('project_id')
-        if not project_id:
-            print(f"No project_id found for instrument {instrument_id}")
-            return None
-            
-        # Get project information from projects table
-        project_resp = supabase.table('projects').select('*').eq('id', project_id).execute()
-        if not project_resp.data:
-            print(f"No project found with id {project_id}")
-            return None
-            
-        project = project_resp.data[0]
-        return {
+        instrument = instrument_resp.data[0]
+        project_id = instrument.get('project_id')
+        
+        # Initialize with instrument details
+        instrument_info = {
             'project_id': project_id,
-            'project_name': project.get('name', 'Unknown Project'),
-            'project_description': project.get('description', '')
+            'project_name': 'Unknown Project',
+            'project_description': '',
+            'instrument_id': instrument_id,
+            'instrument_name': instrument.get('instrument_name', 'Unknown Instrument'),
+            'serial_number': instrument.get('sno', 'N/A'),
+            'instrument_location': instrument.get('instrument_location', 'N/A')
         }
+        
+        # Try to get project information if project_id exists
+        if project_id:
+            try:
+                project_resp = supabase.table('Projects').select('*').eq('id', project_id).execute()
+                if project_resp.data:
+                    project = project_resp.data[0]
+                    instrument_info['project_name'] = project.get('name', 'Unknown Project')
+                    instrument_info['project_description'] = project.get('description', '')
+                else:
+                    print(f"No project found with id {project_id}")
+            except Exception as project_error:
+                print(f"Projects table not accessible for {instrument_id}: {project_error}")
+                # Use fallback project names based on instrument type
+                if 'ROCKSMG' in instrument_id:
+                    instrument_info['project_name'] = 'Yellow Line ANC'
+                elif 'SMG' in instrument_id:
+                    instrument_info['project_name'] = 'Dulles Airport Monitoring'
+                elif 'TILT' in instrument_id:
+                    instrument_info['project_name'] = 'Dulles Airport Monitoring'
+                elif 'INSTANTEL' in instrument_id:
+                    instrument_info['project_name'] = 'Dulles Airport Monitoring'
+        else:
+            print(f"No project_id found for instrument {instrument_id}")
+            
+        return instrument_info
     except Exception as e:
         print(f"Error fetching project info for {instrument_id}: {e}")
         return None
@@ -234,20 +256,25 @@ def check_and_send_tiltmeter_alerts():
                 node_alerts[node_id] = node_messages
 
         if node_alerts:
-            # Get project information for tiltmeters from database
+            # Get project information and instrument details for tiltmeters from database
             project_name = "ANC DAR-BC"  # Default fallback
+            instrument_details = []
+            
             try:
-                # Get project info from the first instrument (they should all be the same project)
-                first_instrument_id = Config.NODE_TO_INSTRUMENT_ID.get(node_ids[0])
-                if first_instrument_id:
-                    project_info = get_project_info(first_instrument_id)
-                    if project_info:
-                        project_name = project_info['project_name']
+                # Get instrument details for all tiltmeter instruments
+                for node_id in node_ids:
+                    instrument_id = Config.NODE_TO_INSTRUMENT_ID.get(node_id)
+                    if instrument_id:
+                        instrument_info = get_project_info(instrument_id)
+                        if instrument_info:
+                            instrument_details.append(instrument_info)
+                            if not project_name or project_name == "ANC DAR-BC":
+                                project_name = instrument_info['project_name']
             except Exception as e:
                 print(f"Error getting project info for tiltmeters: {e}")
             
             # Create email body with professional styling
-            body = _create_tiltmeter_email_body(node_alerts, node_ids, project_name)
+            body = _create_tiltmeter_email_body(node_alerts, node_ids, project_name, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             est = pytz.timezone('US/Eastern')
@@ -279,7 +306,7 @@ def check_and_send_tiltmeter_alerts():
     except Exception as e:
         print(f"Error in check_and_send_tiltmeter_alerts: {e}")
 
-def _create_tiltmeter_email_body(node_alerts, node_ids, project_name):
+def _create_tiltmeter_email_body(node_alerts, node_ids, project_name, instrument_details):
     """Create HTML email body for tiltmeter alerts"""
     body = f"""
     <html>
@@ -308,6 +335,11 @@ def _create_tiltmeter_email_body(node_alerts, node_ids, project_name):
             .company-info {{ font-weight: bold; color: #0056d2; }}
             .project-info {{ background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
             .project-info p {{ margin: 0; color: #0056d2; font-weight: bold; }}
+            .instrument-info {{ background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .instrument-info h4 {{ margin: 0 0 10px 0; color: #0056d2; }}
+            .instrument-info table {{ width: 100%; border-collapse: collapse; }}
+            .instrument-info th, .instrument-info td {{ padding: 8px; text-align: left; border: 1px solid #dee2e6; }}
+            .instrument-info th {{ background-color: #e9ecef; font-weight: bold; }}
         </style>
     </head>
     <body>
@@ -320,6 +352,36 @@ def _create_tiltmeter_email_body(node_alerts, node_ids, project_name):
             <div class="content">
                 <div class="project-info">
                     <p>📋 Project: {project_name}</p>
+                </div>
+                
+                <div class="instrument-info">
+                    <h4>📊 Instrument Details</h4>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Instrument ID</th>
+                                <th>Instrument Name</th>
+                                <th>Serial Number</th>
+                                <th>Location</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+    """
+    
+    # Add instrument details
+    for instrument in instrument_details:
+        body += f"""
+                            <tr>
+                                <td>{instrument['instrument_id']}</td>
+                                <td>{instrument['instrument_name']}</td>
+                                <td>{instrument['serial_number']}</td>
+                                <td>{instrument['instrument_location']}</td>
+                            </tr>
+        """
+    
+    body += """
+                        </tbody>
+                    </table>
                 </div>
                 
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
@@ -511,15 +573,18 @@ def check_and_send_seismograph_alert():
 
         # 6. Send email if there are alerts
         if alerts_by_hour:
-            # Get project information for both SMG1 instruments from database
+            # Get project information and instrument details for both SMG1 instruments from database
             project_names = []
+            instrument_details = []
+            
             try:
                 # Check both SMG1 and SMG-1 instruments
                 for smg_id in ['SMG1', 'SMG-1']:
-                    project_info = get_project_info(smg_id)
-                    if project_info and project_info['project_name']:
-                        if project_info['project_name'] not in project_names:
-                            project_names.append(project_info['project_name'])
+                    instrument_info = get_project_info(smg_id)
+                    if instrument_info and instrument_info['project_name']:
+                        instrument_details.append(instrument_info)
+                        if instrument_info['project_name'] not in project_names:
+                            project_names.append(instrument_info['project_name'])
             except Exception as e:
                 print(f"Error getting project info for SMG instruments: {e}")
             
@@ -529,7 +594,7 @@ def check_and_send_seismograph_alert():
             else:
                 project_name = "ANC DAR BC and DGMTS Testing"  # Default fallback
                 
-            body = _create_seismograph_email_body(alerts_by_hour, "Seismograph", project_name)
+            body = _create_seismograph_email_body(alerts_by_hour, "Seismograph", project_name, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -683,16 +748,19 @@ def check_and_send_smg3_seismograph_alert():
 
         # 6. Send email if there are alerts
         if alerts_by_hour:
-            # Get project information for SMG-3 seismograph from database
+            # Get project information and instrument details for SMG-3 seismograph from database
             project_name = "Unknown Project"  # Default fallback
+            instrument_details = []
+            
             try:
-                project_info = get_project_info('SMG-3')
-                if project_info:
-                    project_name = project_info['project_name']
+                instrument_info = get_project_info('SMG-3')
+                if instrument_info:
+                    instrument_details.append(instrument_info)
+                    project_name = instrument_info['project_name']
             except Exception as e:
                 print(f"Error getting project info for SMG-3: {e}")
                 
-            body = _create_seismograph_email_body(alerts_by_hour, "ANC DAR-BC Seismograph", project_name)
+            body = _create_seismograph_email_body(alerts_by_hour, "ANC DAR-BC Seismograph", project_name, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -719,7 +787,7 @@ def check_and_send_smg3_seismograph_alert():
     except Exception as e:
         print(f"Error in check_and_send_smg3_seismograph_alert: {e}")
 
-def _create_seismograph_email_body(alerts_by_hour, seismograph_name, project_name):
+def _create_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_details):
     """Create HTML email body for seismograph alerts"""
     # Format project name for display
     if " & " in project_name:
@@ -754,6 +822,11 @@ def _create_seismograph_email_body(alerts_by_hour, seismograph_name, project_nam
             .company-info {{ font-weight: bold; color: #0056d2; }}
             .project-info {{ background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
             .project-info p {{ margin: 0; color: #0056d2; font-weight: bold; }}
+            .instrument-info {{ background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .instrument-info h4 {{ margin: 0 0 10px 0; color: #0056d2; }}
+            .instrument-info table {{ width: 100%; border-collapse: collapse; }}
+            .instrument-info th, .instrument-info td {{ padding: 8px; text-align: left; border: 1px solid #dee2e6; }}
+            .instrument-info th {{ background-color: #e9ecef; font-weight: bold; }}
         </style>
     </head>
     <body>
@@ -766,6 +839,36 @@ def _create_seismograph_email_body(alerts_by_hour, seismograph_name, project_nam
             <div class="content">
                 <div class="project-info">
                     <p>📋 {project_display}</p>
+                </div>
+                
+                <div class="instrument-info">
+                    <h4>📊 Instrument Details</h4>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Instrument ID</th>
+                                <th>Instrument Name</th>
+                                <th>Serial Number</th>
+                                <th>Location</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+    """
+    
+    # Add instrument details
+    for instrument in instrument_details:
+        body += f"""
+                            <tr>
+                                <td>{instrument['instrument_id']}</td>
+                                <td>{instrument['instrument_name']}</td>
+                                <td>{instrument['serial_number']}</td>
+                                <td>{instrument['instrument_location']}</td>
+                            </tr>
+        """
+    
+    body += f"""
+                        </tbody>
+                    </table>
                 </div>
                 
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">

@@ -10,31 +10,53 @@ from .email_service import send_email
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
 def get_project_info(instrument_id):
-    """Get project information for an instrument from the database"""
+    """Get project information and instrument details for an instrument from the database"""
     try:
-        # First get the instrument to find its project_id
-        instrument_resp = supabase.table('instruments').select('project_id').eq('instrument_id', instrument_id).execute()
+        # Get the instrument with all details including project_id
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
         if not instrument_resp.data:
             print(f"No instrument found for {instrument_id}")
             return None
             
-        project_id = instrument_resp.data[0].get('project_id')
-        if not project_id:
-            print(f"No project_id found for instrument {instrument_id}")
-            return None
-            
-        # Get project information from projects table
-        project_resp = supabase.table('projects').select('*').eq('id', project_id).execute()
-        if not project_resp.data:
-            print(f"No project found with id {project_id}")
-            return None
-            
-        project = project_resp.data[0]
-        return {
+        instrument = instrument_resp.data[0]
+        project_id = instrument.get('project_id')
+        
+        # Initialize with instrument details
+        instrument_info = {
             'project_id': project_id,
-            'project_name': project.get('name', 'Unknown Project'),
-            'project_description': project.get('description', '')
+            'project_name': 'Unknown Project',
+            'project_description': '',
+            'instrument_id': instrument_id,
+            'instrument_name': instrument.get('instrument_name', 'Unknown Instrument'),
+            'serial_number': instrument.get('sno', 'N/A'),
+            'instrument_location': instrument.get('instrument_location', 'N/A')
         }
+        
+        # Try to get project information if project_id exists
+        if project_id:
+            try:
+                project_resp = supabase.table('Projects').select('*').eq('id', project_id).execute()
+                if project_resp.data:
+                    project = project_resp.data[0]
+                    instrument_info['project_name'] = project.get('name', 'Unknown Project')
+                    instrument_info['project_description'] = project.get('description', '')
+                else:
+                    print(f"No project found with id {project_id}")
+            except Exception as project_error:
+                print(f"Projects table not accessible for {instrument_id}: {project_error}")
+                # Use fallback project names based on instrument type
+                if 'ROCKSMG' in instrument_id:
+                    instrument_info['project_name'] = 'Yellow Line ANC'
+                elif 'SMG' in instrument_id:
+                    instrument_info['project_name'] = 'Dulles Airport Monitoring'
+                elif 'TILT' in instrument_id:
+                    instrument_info['project_name'] = 'Dulles Airport Monitoring'
+                elif 'INSTANTEL' in instrument_id:
+                    instrument_info['project_name'] = 'Dulles Airport Monitoring'
+        else:
+            print(f"No project_id found for instrument {instrument_id}")
+            
+        return instrument_info
     except Exception as e:
         print(f"Error fetching project info for {instrument_id}: {e}")
         return None
@@ -176,16 +198,19 @@ def check_and_send_micromate_alert():
 
         # 6. Send email if there are alerts
         if alerts_by_hour:
-            # Get project information for micromate from database
-            project_name = "Unknown Project"  # Default fallback
+            # Get project information and instrument details for micromate from database
+            project_name = "Lincoln Lewis Fairfax"  # Default fallback
+            instrument_details = []
+            
             try:
-                project_info = get_project_info('INSTANTEL-1')
-                if project_info:
-                    project_name = project_info['project_name']
+                instrument_info = get_project_info('INSTANTEL-1')
+                if instrument_info:
+                    instrument_details.append(instrument_info)
+                    project_name = instrument_info['project_name']
             except Exception as e:
                 print(f"Error getting project info for INSTANTEL-1: {e}")
                 
-            body = _create_micromate_email_body(alerts_by_hour, project_name)
+            body = _create_micromate_email_body(alerts_by_hour, project_name, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -212,7 +237,7 @@ def check_and_send_micromate_alert():
     except Exception as e:
         print(f"Error in check_and_send_micromate_alert: {e}")
 
-def _create_micromate_email_body(alerts_by_hour, project_name):
+def _create_micromate_email_body(alerts_by_hour, project_name, instrument_details):
     """Create HTML email body for Micromate alerts"""
     body = f"""
     <html>
@@ -241,6 +266,11 @@ def _create_micromate_email_body(alerts_by_hour, project_name):
             .company-info {{ font-weight: bold; color: #0056d2; }}
             .project-info {{ background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
             .project-info p {{ margin: 0; color: #0056d2; font-weight: bold; }}
+            .instrument-info {{ background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .instrument-info h4 {{ margin: 0 0 10px 0; color: #0056d2; }}
+            .instrument-info table {{ width: 100%; border-collapse: collapse; }}
+            .instrument-info th, .instrument-info td {{ padding: 8px; text-align: left; border: 1px solid #dee2e6; }}
+            .instrument-info th {{ background-color: #e9ecef; font-weight: bold; }}
         </style>
     </head>
     <body>
@@ -253,6 +283,36 @@ def _create_micromate_email_body(alerts_by_hour, project_name):
             <div class="content">
                 <div class="project-info">
                     <p>📋 Project: {project_name}</p>
+                </div>
+                
+                <div class="instrument-info">
+                    <h4>📊 Instrument Details</h4>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Instrument ID</th>
+                                <th>Instrument Name</th>
+                                <th>Serial Number</th>
+                                <th>Location</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+    """
+    
+    # Add instrument details
+    for instrument in instrument_details:
+        body += f"""
+                            <tr>
+                                <td>{instrument['instrument_id']}</td>
+                                <td>{instrument['instrument_name']}</td>
+                                <td>{instrument['serial_number']}</td>
+                                <td>{instrument['instrument_location']}</td>
+                            </tr>
+        """
+    
+    body += f"""
+                        </tbody>
+                    </table>
                 </div>
                 
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">

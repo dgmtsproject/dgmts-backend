@@ -10,31 +10,53 @@ from .email_service import send_email
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
 def get_project_info(instrument_id):
-    """Get project information for an instrument from the database"""
+    """Get project information and instrument details for an instrument from the database"""
     try:
-        # First get the instrument to find its project_id
-        instrument_resp = supabase.table('instruments').select('project_id').eq('instrument_id', instrument_id).execute()
+        # Get the instrument with all details including project_id
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
         if not instrument_resp.data:
             print(f"No instrument found for {instrument_id}")
             return None
             
-        project_id = instrument_resp.data[0].get('project_id')
-        if not project_id:
-            print(f"No project_id found for instrument {instrument_id}")
-            return None
-            
-        # Get project information from projects table
-        project_resp = supabase.table('projects').select('*').eq('id', project_id).execute()
-        if not project_resp.data:
-            print(f"No project found with id {project_id}")
-            return None
-            
-        project = project_resp.data[0]
-        return {
+        instrument = instrument_resp.data[0]
+        project_id = instrument.get('project_id')
+        
+        # Initialize with instrument details
+        instrument_info = {
             'project_id': project_id,
-            'project_name': project.get('name', 'Unknown Project'),
-            'project_description': project.get('description', '')
+            'project_name': 'Unknown Project',
+            'project_description': '',
+            'instrument_id': instrument_id,
+            'instrument_name': instrument.get('instrument_name', 'Unknown Instrument'),
+            'serial_number': instrument.get('sno', 'N/A'),
+            'instrument_location': instrument.get('instrument_location', 'N/A')
         }
+        
+        # Try to get project information if project_id exists
+        if project_id:
+            try:
+                project_resp = supabase.table('Projects').select('*').eq('id', project_id).execute()
+                if project_resp.data:
+                    project = project_resp.data[0]
+                    instrument_info['project_name'] = project.get('name', 'Unknown Project')
+                    instrument_info['project_description'] = project.get('description', '')
+                else:
+                    print(f"No project found with id {project_id}")
+            except Exception as project_error:
+                print(f"Projects table not accessible for {instrument_id}: {project_error}")
+                # Use fallback project names based on instrument type
+                if 'ROCKSMG' in instrument_id:
+                    instrument_info['project_name'] = 'Yellow Line ANC'
+                elif 'SMG' in instrument_id:
+                    instrument_info['project_name'] = 'ANC DAR-BC'
+                elif 'TILT' in instrument_id:
+                    instrument_info['project_name'] = 'ANC DAR-BC'
+                elif 'INSTANTEL' in instrument_id:
+                    instrument_info['project_name'] = 'Lincoln Lewis Fairfax'
+        else:
+            print(f"No project_id found for instrument {instrument_id}")
+            
+        return instrument_info
     except Exception as e:
         print(f"Error fetching project info for {instrument_id}: {e}")
         return None
@@ -95,16 +117,18 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         response = requests.get(url, headers=headers)
         if response.status_code != 200:
             print(f"Failed to fetch {instrument_id} background data: {response.status_code} {response.text}")
+            if response.status_code == 404:
+                print(f"Device ID {project_id} not found in Syscom API. This device may not exist or be accessible.")
             return
 
         data = response.json()
         background_data = data.get('data', [])
         
         if not background_data:
-            print(f"No {instrument_id} background data received for the last hour")
+            print(f"No background data received for {instrument_id} in the last hour")
             return
 
-        print(f"Received {len(background_data)} {instrument_id} data points")
+        print(f"Received {len(background_data)} data points for {instrument_id}")
 
         # 4. Group data by hour and find highest values for each axis
         hourly_data = {}
@@ -182,16 +206,19 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         if alerts_by_hour:
             seismograph_name = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['name']
             
-            # Get project information from database
-            project_name = "Unknown Project"  # Default fallback
+            # Get project information and instrument details from database
+            project_name = "Yellow Line ANC"  # Default fallback
+            instrument_details = []
+            
             try:
-                project_info = get_project_info(instrument_id)
-                if project_info:
-                    project_name = project_info['project_name']
+                instrument_info = get_project_info(instrument_id)
+                if instrument_info:
+                    instrument_details.append(instrument_info)
+                    project_name = instrument_info['project_name']
             except Exception as e:
                 print(f"Error getting project info for {instrument_id}: {e}")
                 
-            body = _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_id)
+            body = _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_id, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -218,7 +245,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
     except Exception as e:
         print(f"Error in check_and_send_rock_seismograph_alert for {instrument_id}: {e}")
 
-def _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_id):
+def _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_id, instrument_details):
     """Create HTML email body for Rock Seismograph alerts"""
     body = f"""
     <html>
@@ -245,6 +272,13 @@ def _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, projec
             .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }}
             .footer p {{ margin: 0; }}
             .company-info {{ font-weight: bold; color: #0056d2; }}
+            .project-info {{ background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .project-info p {{ margin: 0; color: #0056d2; font-weight: bold; }}
+            .instrument-info {{ background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .instrument-info h4 {{ margin: 0 0 10px 0; color: #0056d2; }}
+            .instrument-info table {{ width: 100%; border-collapse: collapse; }}
+            .instrument-info th, .instrument-info td {{ padding: 8px; text-align: left; border: 1px solid #dee2e6; }}
+            .instrument-info th {{ background-color: #e9ecef; font-weight: bold; }}
         </style>
     </head>
     <body>
@@ -255,6 +289,40 @@ def _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, projec
             </div>
             
             <div class="content">
+                <div class="project-info">
+                    <p>📋 Project: {project_name}</p>
+                </div>
+                
+                <div class="instrument-info">
+                    <h4>📊 Instrument Details</h4>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Instrument ID</th>
+                                <th>Instrument Name</th>
+                                <th>Serial Number</th>
+                                <th>Location</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+    """
+    
+    # Add instrument details
+    for instrument in instrument_details:
+        body += f"""
+                            <tr>
+                                <td>{instrument['instrument_id']}</td>
+                                <td>{instrument['instrument_name']}</td>
+                                <td>{instrument['serial_number']}</td>
+                                <td>{instrument['instrument_location']}</td>
+                            </tr>
+        """
+    
+    body += f"""
+                        </tbody>
+                    </table>
+                </div>
+                
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                     This is an automated alert notification from the DGMTS monitoring system. 
                     The following {seismograph_name} ({instrument_id}) thresholds have been exceeded in the last hour:
