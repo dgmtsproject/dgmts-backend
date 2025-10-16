@@ -9,6 +9,21 @@ from .email_service import send_email
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
+def log_alert_event(log_type, log_text, instrument_id, log_reference_alert=None):
+    """Log alert events to sent_alert_logs table"""
+    try:
+        log_data = {
+            'log_type': log_type,
+            'log': log_text,
+            'for_instrument': instrument_id,
+            'log_time': datetime.now(timezone.utc).isoformat(),
+            'log_reference_alert': log_reference_alert
+        }
+        supabase.table('sent_alert_logs').insert(log_data).execute()
+        print(f"Logged: {log_type} - {log_text}")
+    except Exception as e:
+        print(f"Failed to log alert event: {e}")
+
 def get_project_info(instrument_id):
     """Get project information and instrument details for an instrument from the database"""
     try:

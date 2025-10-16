@@ -9,6 +9,21 @@ from .email_service import send_email
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
+def log_alert_event(log_type, log_text, instrument_id, log_reference_alert=None):
+    """Log alert events to sent_alert_logs table"""
+    try:
+        log_data = {
+            'log_type': log_type,
+            'log': log_text,
+            'for_instrument': instrument_id,
+            'log_time': datetime.now(timezone.utc).isoformat(),
+            'log_reference_alert': log_reference_alert
+        }
+        supabase.table('sent_alert_logs').insert(log_data).execute()
+        print(f"Logged: {log_type} - {log_text}")
+    except Exception as e:
+        print(f"Failed to log alert event: {e}")
+
 def get_project_info(instrument_id):
     """Get project information and instrument details for an instrument from the database"""
     try:
@@ -64,12 +79,14 @@ def get_project_info(instrument_id):
 def check_and_send_rock_seismograph_alert(instrument_id):
     """Check Rock Seismograph alerts and send emails if thresholds are exceeded"""
     print(f"Checking {instrument_id} Rock Seismograph alerts using background API...")
+    log_alert_event("ALERT_CHECK_START", f"Starting alert check for {instrument_id}", instrument_id)
     try:
         # 1. Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
             print(f"No instrument found for {instrument_id}")
+            log_alert_event("ERROR", f"No instrument found for {instrument_id}", instrument_id)
             return
 
         # For seismograph, use ONLY single values (not a tiltmeter)
@@ -98,27 +115,38 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             print("No SYSCOM_API_KEY set in environment")
             return
 
-        # Get project ID from database
-        project_id = None
+        # Get device ID from database (not project_id)
+        device_id = None
         try:
-            project_info = get_project_info(instrument_id)
-            if project_info:
-                project_id = project_info['project_id']
+            instrument_info = get_project_info(instrument_id)
+            if instrument_info:
+                # Get the actual instrument record to find syscom_device_id
+                instrument_resp = supabase.table('instruments').select('syscom_device_id').eq('instrument_id', instrument_id).execute()
+                if instrument_resp.data and instrument_resp.data[0].get('syscom_device_id'):
+                    device_id = instrument_resp.data[0]['syscom_device_id']
+                    print(f"Using device_id {device_id} for {instrument_id}")
+                else:
+                    print(f"No syscom_device_id found for {instrument_id}")
+                    device_id = None
             else:
-                # Fallback to config if database lookup fails
-                project_id = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['project_id']
+                print(f"Could not get instrument info for {instrument_id}")
         except Exception as e:
-            print(f"Error getting project info for {instrument_id}: {e}")
-            # Fallback to config if database lookup fails
-            project_id = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['project_id']
+            print(f"Error getting device info for {instrument_id}: {e}")
+        
+        if not device_id:
+            print(f"No device_id available for {instrument_id}, skipping API call")
+            log_alert_event("ERROR", f"No device_id available for {instrument_id}", instrument_id)
+            return
             
-        url = f"https://scs.syscom-instruments.com/public-api/v1/records/background/{project_id}/data?start={start_time}&end={end_time}"
+        url = f"https://scs.syscom-instruments.com/public-api/v1/records/background/{device_id}/data?start={start_time}&end={end_time}"
         headers = {"x-scs-api-key": api_key}
         response = requests.get(url, headers=headers)
         if response.status_code != 200:
             print(f"Failed to fetch {instrument_id} background data: {response.status_code} {response.text}")
+            log_alert_event("API_ERROR", f"Failed to fetch data: {response.status_code} - {response.text}", instrument_id)
             if response.status_code == 404:
-                print(f"Device ID {project_id} not found in Syscom API. This device may not exist or be accessible.")
+                print(f"Device ID {device_id} not found in Syscom API. This device may not exist or be accessible.")
+                log_alert_event("API_404", f"Device ID {device_id} not found in Syscom API", instrument_id)
             return
 
         data = response.json()
@@ -126,9 +154,11 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         
         if not background_data:
             print(f"No background data received for {instrument_id} in the last hour")
+            log_alert_event("NO_DATA", f"No background data received for {instrument_id} in the last hour", instrument_id)
             return
 
         print(f"Received {len(background_data)} data points for {instrument_id}")
+        log_alert_event("DATA_RECEIVED", f"Received {len(background_data)} data points for {instrument_id}", instrument_id)
 
         # 4. Group data by hour and find highest values for each axis
         hourly_data = {}
@@ -201,6 +231,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
                     'timestamp': timestamp,
                     'max_values': {'X': max_x, 'Y': max_y, 'Z': max_z}
                 }
+                log_alert_event("THRESHOLD_EXCEEDED", f"Threshold exceeded for {instrument_id} at {hour_key}: {len(messages)} violations", instrument_id)
 
         # 6. Send email if there are alerts
         if alerts_by_hour:
@@ -227,23 +258,33 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
             if all_emails:
-                send_email(",".join(all_emails), subject, body)
-                print(f"Sent {instrument_id} Rock Seismograph alert email for {len(alerts_by_hour)} hours with alerts")
-                
-                # Record that we've sent for each hour
-                for hour_key, alert_data in alerts_by_hour.items():
-                    supabase.table('sent_alerts').insert({
-                        'instrument_id': instrument_id,
-                        'node_id': project_id,
-                        'timestamp': alert_data['timestamp'],
-                        'alert_type': 'any'
-                    }).execute()
+                email_sent = send_email(",".join(all_emails), subject, body)
+                if email_sent:
+                    print(f"Sent {instrument_id} Rock Seismograph alert email for {len(alerts_by_hour)} hours with alerts")
+                    log_alert_event("EMAIL_SENT", f"Alert email sent successfully for {instrument_id} to {len(all_emails)} recipients", instrument_id)
+                    
+                    # Record that we've sent for each hour
+                    for hour_key, alert_data in alerts_by_hour.items():
+                        sent_alert_resp = supabase.table('sent_alerts').insert({
+                            'instrument_id': instrument_id,
+                            'node_id': device_id,  # Use device_id instead of project_id
+                            'timestamp': alert_data['timestamp'],
+                            'alert_type': 'any'
+                        }).execute()
+                        if sent_alert_resp.data:
+                            alert_id = sent_alert_resp.data[0]['id']
+                            log_alert_event("ALERT_RECORDED", f"Alert recorded in sent_alerts table with ID {alert_id}", instrument_id, alert_id)
+                else:
+                    log_alert_event("EMAIL_FAILED", f"Failed to send alert email for {instrument_id}", instrument_id)
             else:
                 print(f"No alert/warning/shutdown emails configured for {instrument_id}")
+                log_alert_event("NO_EMAILS", f"No alert/warning/shutdown emails configured for {instrument_id}", instrument_id)
         else:
             print(f"No thresholds crossed for any hour in the last hour for {instrument_id}.")
+            log_alert_event("NO_ALERTS", f"No thresholds crossed for {instrument_id} in the last hour", instrument_id)
     except Exception as e:
         print(f"Error in check_and_send_rock_seismograph_alert for {instrument_id}: {e}")
+        log_alert_event("ERROR", f"Error in alert check for {instrument_id}: {str(e)}", instrument_id)
 
 def _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_id, instrument_details):
     """Create HTML email body for Rock Seismograph alerts"""
