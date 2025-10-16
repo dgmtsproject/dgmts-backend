@@ -82,31 +82,37 @@ def test_rock_seismograph_email():
         data = request.get_json() or {}
         instrument_id = data.get('instrument_id', 'ROCKSMG-1')
         test_email = data.get('test_email')
-        days_back = data.get('days_back', 30)
+        test_emails = data.get('test_emails', [])  # Support multiple emails
+        days_back = data.get('days_back', 1)  # Default to 1 day (today)
         
-        if not test_email:
+        # Use test_emails if provided, otherwise use single test_email
+        if test_emails:
+            emails_to_use = test_emails
+        elif test_email:
+            emails_to_use = [test_email]
+        else:
             return jsonify({
-                "error": "test_email is required"
+                "error": "Either test_email or test_emails is required"
             }), 400
         
-        print(f"🧪 Sending missed alerts for {instrument_id} to {test_email} (last {days_back} days)")
+        print(f"🧪 Sending missed alerts for {instrument_id} to {emails_to_use} (last {days_back} days)")
         
-        # Run the missed alerts function with custom email
-        success = send_missed_rock_seismograph_alerts(instrument_id, days_back, custom_emails=[test_email])
+        # Run the missed alerts function with custom emails
+        success = send_missed_rock_seismograph_alerts(instrument_id, days_back, custom_emails=emails_to_use)
         
         if success:
             return jsonify({
-                "message": f"✅ Missed alerts sent to {test_email} for {instrument_id}",
+                "message": f"✅ Missed alerts sent to {emails_to_use} for {instrument_id}",
                 "instrument_id": instrument_id,
-                "test_email": test_email,
+                "test_emails": emails_to_use,
                 "days_back": days_back,
                 "status": "success"
             }), 200
         else:
             return jsonify({
-                "error": f"❌ Failed to send missed alerts to {test_email}",
+                "error": f"❌ Failed to send missed alerts to {emails_to_use}",
                 "instrument_id": instrument_id,
-                "test_email": test_email,
+                "test_emails": emails_to_use,
                 "days_back": days_back,
                 "status": "failed"
             }), 500

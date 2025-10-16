@@ -27,6 +27,13 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
         days_back (int): How many days back to check for missed alerts
         custom_emails (list): Optional list of custom email addresses to send to instead of configured ones
     """
+    # Ensure days_back is an integer
+    try:
+        days_back = int(days_back)
+    except (ValueError, TypeError):
+        print(f"⚠️ Invalid days_back value: {days_back}, using default 30")
+        days_back = 30
+    
     print(f"🔍 Checking missed alerts for {instrument_id} (last {days_back} days)...")
     
     try:
@@ -52,7 +59,18 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
         
         # Use custom emails if provided, otherwise use configured emails
         if custom_emails:
-            all_emails = set(custom_emails)
+            # Ensure custom_emails is a flat list of strings
+            if isinstance(custom_emails, list):
+                # Flatten the list in case it contains nested lists
+                flat_emails = []
+                for email in custom_emails:
+                    if isinstance(email, list):
+                        flat_emails.extend(email)
+                    elif isinstance(email, str):
+                        flat_emails.append(email)
+                all_emails = set(flat_emails)
+            else:
+                all_emails = set([str(custom_emails)])
             print(f"📬 Using custom emails: {list(all_emails)}")
         else:
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
@@ -94,7 +112,7 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
         
         if response.status_code != 200:
             print(f"❌ Failed to fetch data: {response.status_code} {response.text}")
-            log_alert_event("API_ERROR", f"Failed to fetch historical data: {response.status_code}", instrument_id)
+            
             return False
         
         data = response.json()
@@ -251,7 +269,7 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
             except:
                 formatted_time = hour_key.replace('-', ' ')
             
-            subject = f"🌊 MISSED {alert_type.upper()} - {seismograph_name} {axis}-axis - {formatted_time}"
+            subject = f"🌊 {alert_type.upper()} - {seismograph_name} {axis}-axis - {formatted_time}"
             
             # Send email
             email_sent = send_email(",".join(all_emails), subject, body)
@@ -272,29 +290,23 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
                         
                         if sent_alert_resp.data:
                             alert_id = sent_alert_resp.data[0]['id']
-                            log_alert_event("MISSED_ALERT_RECORDED", f"Alert recorded for hour {hour_key}", instrument_id, alert_id)
                             recorded_hours.add(hour_key)
                     except Exception as insert_error:
                         # If duplicate key error, just log that it was already recorded
                         if "duplicate key" in str(insert_error).lower() or "23505" in str(insert_error):
-                            log_alert_event("MISSED_ALERT_RECORDED", f"Alert already recorded for hour {hour_key}", instrument_id)
                             recorded_hours.add(hour_key)
                         else:
                             print(f"⚠️ Failed to record alert in database: {insert_error}")
                 
-                log_alert_event("MISSED_ALERT_SENT", f"Missed {alert_type} email sent for {hour_key} - {axis}-axis", instrument_id)
             else:
                 print(f"❌ Failed to send {alert_type} email for {hour_key} - {axis}-axis")
-                log_alert_event("MISSED_ALERT_FAILED", f"Failed to send missed {alert_type} email for {hour_key} - {axis}-axis", instrument_id)
         
         print(f"📊 Summary: {emails_sent}/{len(missed_alerts)} emails sent successfully")
-        log_alert_event("MISSED_ALERTS_COMPLETE", f"Processed {len(missed_alerts)} missed alerts, sent {emails_sent} emails", instrument_id)
         
         return True
         
     except Exception as e:
         print(f"❌ Error processing missed alerts for {instrument_id}: {str(e)}")
-        log_alert_event("MISSED_ALERTS_ERROR", f"Error processing missed alerts: {str(e)}", instrument_id)
         return False
 
 def main():
@@ -315,6 +327,7 @@ def main():
         print("-" * 30)
     
     print("\n🏁 Missed alerts check completed!")
+
 
 if __name__ == "__main__":
     main()

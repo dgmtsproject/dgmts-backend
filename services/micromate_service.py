@@ -108,6 +108,7 @@ def check_and_send_micromate_alert():
         response = requests.get(url)
         if response.status_code != 200:
             print(f"Failed to fetch Micromate data: {response.status_code} {response.text}")
+            log_alert_event("ERROR", f"Failed to fetch Micromate data: {response.status_code} {response.text}", 'INSTANTEL-1')
             return
 
         data = response.json()
@@ -115,6 +116,7 @@ def check_and_send_micromate_alert():
         
         if not micromate_readings:
             print("No Micromate data received")
+            log_alert_event("ERROR", "No Micromate data received", 'INSTANTEL-1')
             return
 
         print(f"Received {len(micromate_readings)} Micromate data points")
@@ -156,6 +158,7 @@ def check_and_send_micromate_alert():
                     
             except Exception as e:
                 print(f"Failed to process reading: {e}")
+                log_alert_event("ERROR", f"Failed to process reading: {e}", 'INSTANTEL-1')
                 continue
 
         if not hourly_data:
@@ -224,6 +227,7 @@ def check_and_send_micromate_alert():
                     project_name = instrument_info['project_name']
             except Exception as e:
                 print(f"Error getting project info for INSTANTEL-1: {e}")
+                log_alert_event("ERROR", f"Error getting project info for INSTANTEL-1: {e}", 'INSTANTEL-1')
                 
             body = _create_micromate_email_body(alerts_by_hour, project_name, instrument_details)
             
@@ -251,6 +255,7 @@ def check_and_send_micromate_alert():
             print("No thresholds crossed for any hour in the last hour for Micromate.")
     except Exception as e:
         print(f"Error in check_and_send_micromate_alert: {e}")
+        log_alert_event("ERROR", f"Error in check_and_send_micromate_alert: {e}", 'INSTANTEL-1')
 
 def _create_micromate_email_body(alerts_by_hour, project_name, instrument_details):
     """Create HTML email body for Micromate alerts"""

@@ -31,6 +31,7 @@ def get_project_info(instrument_id):
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
         if not instrument_resp.data:
             print(f"No instrument found for {instrument_id}")
+            log_alert_event("ERROR", f"No instrument found for {instrument_id}", instrument_id)
             return None
             
         instrument = instrument_resp.data[0]
@@ -74,12 +75,12 @@ def get_project_info(instrument_id):
         return instrument_info
     except Exception as e:
         print(f"Error fetching project info for {instrument_id}: {e}")
+        log_alert_event("ERROR", f"Error fetching project info for {instrument_id}: {e}", instrument_id)
         return None
 
 def check_and_send_tiltmeter_alerts():
     """Check tiltmeter alerts and send emails if thresholds are exceeded"""
     print("Checking tiltmeter alerts for both nodes...")
-    log_alert_event("ALERT_CHECK_START", "Starting tiltmeter alert check", "TILTMETER")
     try:
         node_ids = [142939, 143969]
         node_alerts = {}
@@ -307,6 +308,7 @@ def check_and_send_tiltmeter_alerts():
                 instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
                 instrument = instrument_resp.data[0] if instrument_resp.data else None
                 if not instrument:
+                    log_alert_event("ERROR", f"No instrument found for {instrument_id}", instrument_id)
                     continue
                 all_emails.update(instrument.get('alert_emails') or [])
                 all_emails.update(instrument.get('warning_emails') or [])
@@ -471,6 +473,7 @@ def check_and_send_seismograph_alert():
         instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
             print("No instrument found for SMG1")
+            log_alert_event("ERROR", f"In check_and_send_seismograph_alert: No instrument found for SMG1", 'SMG1')
             return
 
         # For seismograph, use ONLY single values (not a tiltmeter)
@@ -504,6 +507,7 @@ def check_and_send_seismograph_alert():
         response = requests.get(url, headers=headers)
         if response.status_code != 200:
             print(f"Failed to fetch background data: {response.status_code} {response.text}")
+            log_alert_event("ERROR", f"Failed to fetch background data: {response.status_code} {response.text}", 'SMG1')
             return
 
         data = response.json()
@@ -512,8 +516,6 @@ def check_and_send_seismograph_alert():
         if not background_data:
             print("No background data received for the last hour")
             return
-
-        print(f"Received {len(background_data)} data points")
 
         # 4. Group data by hour and find highest values for each axis
         hourly_data = {}
@@ -603,6 +605,7 @@ def check_and_send_seismograph_alert():
                             project_names.append(instrument_info['project_name'])
             except Exception as e:
                 print(f"Error getting project info for SMG instruments: {e}")
+                log_alert_event("ERROR", f"Error in check_and_send_seismograph_alert: getting project info for SMG instruments: {e}", 'SMG1')
             
             # Use combined project names or fallback
             if project_names:
@@ -646,6 +649,7 @@ def check_and_send_smg3_seismograph_alert():
         instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
             print("No instrument found for SMG-3")
+            log_alert_event("ERROR", f"Error in check_and_send_smg3_seismograph_alert: No instrument found for SMG-3", 'SMG-3')
             return
 
         # For seismograph, use ONLY single values (not a tiltmeter)
@@ -679,6 +683,7 @@ def check_and_send_smg3_seismograph_alert():
         response = requests.get(url, headers=headers)
         if response.status_code != 200:
             print(f"Failed to fetch SMG-3 background data: {response.status_code} {response.text}")
+            log_alert_event("ERROR", f"Failed to fetch SMG-3 background data: {response.status_code} {response.text}", 'SMG-3')
             return
 
         data = response.json()
@@ -687,8 +692,6 @@ def check_and_send_smg3_seismograph_alert():
         if not background_data:
             print("No SMG-3 background data received for the last hour")
             return
-
-        print(f"Received {len(background_data)} SMG-3 data points")
 
         # 4. Group data by hour and find highest values for each axis
         hourly_data = {}
@@ -704,7 +707,6 @@ def check_and_send_smg3_seismograph_alert():
                 dt_est = dt.astimezone(est)
                 hour_key = dt_est.strftime('%Y-%m-%d-%H')
             except Exception as e:
-                print(f"Failed to parse timestamp {timestamp}: {e}")
                 continue
             
             if hour_key not in hourly_data:
@@ -797,11 +799,12 @@ def check_and_send_smg3_seismograph_alert():
                         'alert_type': 'any'
                     }).execute()
             else:
-                print("No alert/warning/shutdown emails configured for SMG-3")
+                pass
         else:
-            print("No thresholds crossed for any hour in the last hour for SMG-3.")
+            pass
     except Exception as e:
         print(f"Error in check_and_send_smg3_seismograph_alert: {e}")
+        log_alert_event("ERROR", f"Error in check_and_send_smg3_seismograph_alert: {e}", 'SMG-3')
 
 def _create_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_details):
     """Create HTML email body for seismograph alerts"""
