@@ -201,7 +201,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
                 .eq('instrument_id', instrument_id) \
-                .eq('node_id', project_id) \
+                .eq('node_id', device_id) \
                 .eq('timestamp', timestamp) \
                 .execute()
             if already_sent.data:
