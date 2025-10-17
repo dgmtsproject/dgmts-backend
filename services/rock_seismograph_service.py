@@ -97,13 +97,13 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
 
-        # 2. Calculate time range for the last hour in EST
+        # 2. Calculate time range for the last minute in EST
         est = pytz.timezone('US/Eastern')
         now_est = datetime.now(est)
-        one_hour_ago_est = now_est - timedelta(hours=1)
+        one_minute_ago_est = now_est - timedelta(minutes=1)
         
         # Format dates for API
-        start_time = one_hour_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        start_time = one_minute_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
         end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
         
         print(f"Fetching {instrument_id} Rock Seismograph data from {start_time} to {end_time} EST")
@@ -152,49 +152,27 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         background_data = data.get('data', [])
         
         if not background_data:
-            print(f"No background data received for {instrument_id} in the last hour")
+            print(f"No background data received for {instrument_id} in the last minute")
             return
 
-        
-
-        # 4. Group data by hour and find highest values for each axis
-        hourly_data = {}
+        # 4. Check thresholds for each individual reading
+        alerts_by_minute = {}
         for entry in background_data:
             timestamp = entry[0]  # Format: "2025-08-01T15:40:37.741-04:00"
-            x_value = float(entry[1])
-            y_value = float(entry[2])
-            z_value = float(entry[3])
+            x_value = abs(float(entry[1]))
+            y_value = abs(float(entry[2]))
+            z_value = abs(float(entry[3]))
             
-            # Extract hour key (YYYY-MM-DD-HH)
+            # Extract minute key (YYYY-MM-DD-HH-MM)
             try:
                 dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                 dt_est = dt.astimezone(est)
-                hour_key = dt_est.strftime('%Y-%m-%d-%H')
+                minute_key = dt_est.strftime('%Y-%m-%d-%H-%M')
             except Exception as e:
                 print(f"Failed to parse timestamp {timestamp}: {e}")
                 continue
             
-            if hour_key not in hourly_data:
-                hourly_data[hour_key] = {
-                    'max_x': x_value,
-                    'max_y': y_value,
-                    'max_z': z_value,
-                    'timestamp': timestamp
-                }
-            else:
-                hourly_data[hour_key]['max_x'] = max(hourly_data[hour_key]['max_x'], abs(x_value))
-                hourly_data[hour_key]['max_y'] = max(hourly_data[hour_key]['max_y'], abs(y_value))
-                hourly_data[hour_key]['max_z'] = max(hourly_data[hour_key]['max_z'], abs(z_value))
-
-        # 5. Check thresholds for each hour
-        alerts_by_hour = {}
-        for hour_key, hour_data in hourly_data.items():
-            max_x = hour_data['max_x']
-            max_y = hour_data['max_y']
-            max_z = hour_data['max_z']
-            timestamp = hour_data['timestamp']
-            
-            # Check if we've already sent for this hour
+            # Check if we've already sent for this minute
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
                 .eq('instrument_id', instrument_id) \
@@ -202,35 +180,35 @@ def check_and_send_rock_seismograph_alert(instrument_id):
                 .eq('timestamp', timestamp) \
                 .execute()
             if already_sent.data:
-                print(f"{instrument_id} alert already sent for hour {hour_key}, skipping.")
+                print(f"{instrument_id} alert already sent for minute {minute_key}, skipping.")
                 continue
 
             messages = []
             
             # Check shutdown thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if shutdown_value and value >= shutdown_value:
                     messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value:.6f}")
             
             # Check warning thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if warning_value and value >= warning_value:
                     messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value:.6f}")
             
             # Check alert thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if alert_value and value >= alert_value:
                     messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value:.6f}")
 
             if messages:
-                alerts_by_hour[hour_key] = {
+                alerts_by_minute[minute_key] = {
                     'messages': messages,
                     'timestamp': timestamp,
-                    'max_values': {'X': max_x, 'Y': max_y, 'Z': max_z}
+                    'max_values': {'X': x_value, 'Y': y_value, 'Z': z_value}
                 }
 
         # 6. Send email if there are alerts
-        if alerts_by_hour:
+        if alerts_by_minute:
             seismograph_name = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['name']
             
             # Get project information and instrument details from database
@@ -245,7 +223,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             except Exception as e:
                 print(f"Error getting project info for {instrument_id}: {e}")
                 
-            body = _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_id, instrument_details)
+            body = _create_rock_seismograph_email_body(alerts_by_minute, seismograph_name, project_name, instrument_id, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -257,8 +235,8 @@ def check_and_send_rock_seismograph_alert(instrument_id):
                 email_sent = send_email(",".join(all_emails), subject, body)
                 if email_sent:
                     print(f"Alert email sent successfully for {instrument_id} to {len(all_emails)} recipients")
-                    # Record that we've sent for each hour
-                    for hour_key, alert_data in alerts_by_hour.items():
+                    # Record that we've sent for each minute
+                    for minute_key, alert_data in alerts_by_minute.items():
                         sent_alert_resp = supabase.table('sent_alerts').insert({
                             'instrument_id': instrument_id,
                             'node_id': device_id,  # Use device_id instead of project_id
@@ -278,7 +256,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         print(f"Error in check_and_send_rock_seismograph_alert for {instrument_id}: {e}")
         log_alert_event("ERROR", f"Error in alert check for {instrument_id}: {str(e)}", instrument_id)
 
-def _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_id, instrument_details):
+def _create_rock_seismograph_email_body(alerts_by_minute, seismograph_name, project_name, instrument_id, instrument_details):
     """Create HTML email body for Rock Seismograph alerts"""
     body = f"""
     <html>
@@ -358,25 +336,25 @@ def _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, projec
                 
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                     This is an automated alert notification from the DGMTS monitoring system. 
-                    The following {seismograph_name} ({instrument_id}) thresholds have been exceeded in the last hour:
+                    The following {seismograph_name} ({instrument_id}) thresholds have been exceeded in the last minute:
                 </p>
     """
     
-    # Add alerts for each hour
-    for hour_key, alert_data in alerts_by_hour.items():
+    # Add alerts for each minute
+    for minute_key, alert_data in alerts_by_minute.items():
         # Format timestamp to EST
         try:
             dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
             est = pytz.timezone('US/Eastern')
             dt_est = dt_utc.astimezone(est)
-            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']
         
         body += f"""
                 <div class="alert-section">
-                    <h3>📊 Hour: {hour_key.replace('-', ' ')} - {seismograph_name} Alerts ({instrument_id})</h3>
+                    <h3>📊 Minute: {minute_key.replace('-', ' ')} - {seismograph_name} Alerts ({instrument_id})</h3>
         """
         
         for message in alert_data['messages']:
@@ -429,7 +407,7 @@ def _create_rock_seismograph_email_body(alerts_by_hour, seismograph_name, projec
                     <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
                     <p style="margin: 5px 0 0 0; color: #495057;">
                         Please review the {seismograph_name} data and take appropriate action if necessary. 
-                        Values shown are the maximum readings for each axis during the specified hour.
+                        Values shown are the actual readings for each axis at the time of threshold violation.
                         <br><br>
                         <strong>Project:</strong> {project_name}<br>
                         <strong>Instrument:</strong> {instrument_id}

@@ -96,12 +96,12 @@ def check_and_send_micromate_alert():
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
 
-        # 2. Calculate time range for the last hour in EST
+        # 2. Calculate time range for the last minute in EST
         est = pytz.timezone('US/Eastern')
         now_est = datetime.now(est)
-        one_hour_ago_est = now_est - timedelta(hours=1)
+        one_minute_ago_est = now_est - timedelta(minutes=1)
         
-        print(f"Fetching Micromate data from {one_hour_ago_est.strftime('%Y-%m-%dT%H:%M:%S')} to {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
+        print(f"Fetching Micromate data from {one_minute_ago_est.strftime('%Y-%m-%dT%H:%M:%S')} to {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
 
         # 3. Fetch data from Micromate API
         url = "https://imsite.dullesgeotechnical.com/api/micromate/readings"
@@ -121,8 +121,8 @@ def check_and_send_micromate_alert():
 
         print(f"Received {len(micromate_readings)} Micromate data points")
 
-        # 4. Filter data for the last hour and group by hour
-        hourly_data = {}
+        # 4. Filter data for the last minute and check individual readings
+        alerts_by_minute = {}
         for reading in micromate_readings:
             try:
                 # Parse timestamp
@@ -130,92 +130,68 @@ def check_and_send_micromate_alert():
                 dt_utc = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                 dt_est = dt_utc.astimezone(est)
                 
-                # Check if reading is within the last hour
-                if dt_est < one_hour_ago_est or dt_est > now_est:
+                # Check if reading is within the last minute
+                if dt_est < one_minute_ago_est or dt_est > now_est:
                     continue
                 
-                # Extract hour key (YYYY-MM-DD-HH)
-                hour_key = dt_est.strftime('%Y-%m-%d-%H')
+                # Extract minute key (YYYY-MM-DD-HH-MM)
+                minute_key = dt_est.strftime('%Y-%m-%d-%H-%M')
                 
                 # Get values
                 longitudinal = abs(float(reading['Longitudinal']))
                 transverse = abs(float(reading['Transverse']))
                 vertical = abs(float(reading['Vertical']))
                 
-                if hour_key not in hourly_data:
-                    hourly_data[hour_key] = {
-                        'max_longitudinal': longitudinal,
-                        'max_transverse': transverse,
-                        'max_vertical': vertical,
+                # Check if we've already sent for this minute
+                already_sent = supabase.table('sent_alerts') \
+                    .select('id') \
+                    .eq('instrument_id', 'INSTANTEL-1') \
+                    .eq('node_id', 24252) \
+                    .eq('timestamp', timestamp_str) \
+                    .execute()
+                if already_sent.data:
+                    print(f"Micromate alert already sent for minute {minute_key}, skipping.")
+                    continue
+
+                messages = []
+                
+                # Check shutdown thresholds
+                for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+                    if shutdown_value and value >= shutdown_value:
+                        messages.append(f"<b>Shutdown threshold reached on {axis_desc} axis:</b> {value:.6f}")
+                
+                # Check warning thresholds
+                for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+                    if warning_value and value >= warning_value:
+                        messages.append(f"<b>Warning threshold reached on {axis_desc} axis:</b> {value:.6f}")
+                
+                # Check alert thresholds
+                for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+                    if alert_value and value >= alert_value:
+                        messages.append(f"<b>Alert threshold reached on {axis_desc} axis:</b> {value:.6f}")
+
+                if messages:
+                    alerts_by_minute[minute_key] = {
+                        'messages': messages,
                         'timestamp': timestamp_str,
-                        'readings_count': 1
+                        'max_values': {
+                            'Longitudinal': longitudinal, 
+                            'Transverse': transverse, 
+                            'Vertical': vertical
+                        }
                     }
-                else:
-                    hourly_data[hour_key]['max_longitudinal'] = max(hourly_data[hour_key]['max_longitudinal'], longitudinal)
-                    hourly_data[hour_key]['max_transverse'] = max(hourly_data[hour_key]['max_transverse'], transverse)
-                    hourly_data[hour_key]['max_vertical'] = max(hourly_data[hour_key]['max_vertical'], vertical)
-                    hourly_data[hour_key]['readings_count'] += 1
                     
             except Exception as e:
                 print(f"Failed to process reading: {e}")
                 log_alert_event("ERROR", f"Failed to process reading: {e}", 'INSTANTEL-1')
                 continue
 
-        if not hourly_data:
-            print("No Micromate data found for the last hour")
+        if not alerts_by_minute:
+            print("No Micromate data found for the last minute")
             return
 
-        # 5. Check thresholds for each hour
-        alerts_by_hour = {}
-        for hour_key, hour_data in hourly_data.items():
-            max_longitudinal = hour_data['max_longitudinal']
-            max_transverse = hour_data['max_transverse']
-            max_vertical = hour_data['max_vertical']
-            timestamp = hour_data['timestamp']
-            readings_count = hour_data['readings_count']
-            
-            # Check if we've already sent for this hour
-            already_sent = supabase.table('sent_alerts') \
-                .select('id') \
-                .eq('instrument_id', 'INSTANTEL-1') \
-                .eq('node_id', 24252) \
-                .eq('timestamp', timestamp) \
-                .execute()
-            if already_sent.data:
-                print(f"Micromate alert already sent for hour {hour_key}, skipping.")
-                continue
-
-            messages = []
-            
-            # Check shutdown thresholds
-            for axis, value, axis_desc in [('Longitudinal', max_longitudinal, 'Longitudinal'), ('Transverse', max_transverse, 'Transverse'), ('Vertical', max_vertical, 'Vertical')]:
-                if shutdown_value and value >= shutdown_value:
-                    messages.append(f"<b>Shutdown threshold reached on {axis_desc} axis:</b> {value:.6f}")
-            
-            # Check warning thresholds
-            for axis, value, axis_desc in [('Longitudinal', max_longitudinal, 'Longitudinal'), ('Transverse', max_transverse, 'Transverse'), ('Vertical', max_vertical, 'Vertical')]:
-                if warning_value and value >= warning_value:
-                    messages.append(f"<b>Warning threshold reached on {axis_desc} axis:</b> {value:.6f}")
-            
-            # Check alert thresholds
-            for axis, value, axis_desc in [('Longitudinal', max_longitudinal, 'Longitudinal'), ('Transverse', max_transverse, 'Transverse'), ('Vertical', max_vertical, 'Vertical')]:
-                if alert_value and value >= alert_value:
-                    messages.append(f"<b>Alert threshold reached on {axis_desc} axis:</b> {value:.6f}")
-
-            if messages:
-                alerts_by_hour[hour_key] = {
-                    'messages': messages,
-                    'timestamp': timestamp,
-                    'max_values': {
-                        'Longitudinal': max_longitudinal, 
-                        'Transverse': max_transverse, 
-                        'Vertical': max_vertical
-                    },
-                    'readings_count': readings_count
-                }
-
         # 6. Send email if there are alerts
-        if alerts_by_hour:
+        if alerts_by_minute:
             # Get project information and instrument details for micromate from database
             project_name = "Lincoln Lewis Fairfax"  # Default fallback
             instrument_details = []
@@ -229,7 +205,7 @@ def check_and_send_micromate_alert():
                 print(f"Error getting project info for INSTANTEL-1: {e}")
                 log_alert_event("ERROR", f"Error getting project info for INSTANTEL-1: {e}", 'INSTANTEL-1')
                 
-            body = _create_micromate_email_body(alerts_by_hour, project_name, instrument_details)
+            body = _create_micromate_email_body(alerts_by_minute, project_name, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -239,10 +215,10 @@ def check_and_send_micromate_alert():
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
             if all_emails:
                 send_email(",".join(all_emails), subject, body)
-                print(f"Sent Micromate alert email for {len(alerts_by_hour)} hours with alerts")
+                print(f"Sent Micromate alert email for {len(alerts_by_minute)} minutes with alerts")
                 
-                # Record that we've sent for each hour
-                for hour_key, alert_data in alerts_by_hour.items():
+                # Record that we've sent for each minute
+                for minute_key, alert_data in alerts_by_minute.items():
                     supabase.table('sent_alerts').insert({
                         'instrument_id': 'INSTANTEL-1',
                         'node_id': 24252,
@@ -252,12 +228,12 @@ def check_and_send_micromate_alert():
             else:
                 print("No alert/warning/shutdown emails configured for INSTANTEL-1")
         else:
-            print("No thresholds crossed for any hour in the last hour for Micromate.")
+            print("No thresholds crossed for any minute in the last minute for Micromate.")
     except Exception as e:
         print(f"Error in check_and_send_micromate_alert: {e}")
         log_alert_event("ERROR", f"Error in check_and_send_micromate_alert: {e}", 'INSTANTEL-1')
 
-def _create_micromate_email_body(alerts_by_hour, project_name, instrument_details):
+def _create_micromate_email_body(alerts_by_minute, project_name, instrument_details):
     """Create HTML email body for Micromate alerts"""
     body = f"""
     <html>
@@ -337,25 +313,25 @@ def _create_micromate_email_body(alerts_by_hour, project_name, instrument_detail
                 
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                     This is an automated alert notification from the DGMTS monitoring system. 
-                    The following Instantel Micromate thresholds have been exceeded in the last hour:
+                    The following Instantel Micromate thresholds have been exceeded in the last minute:
                 </p>
     """
     
-    # Add alerts for each hour
-    for hour_key, alert_data in alerts_by_hour.items():
+    # Add alerts for each minute
+    for minute_key, alert_data in alerts_by_minute.items():
         # Format timestamp to EST
         try:
             dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
             est = pytz.timezone('US/Eastern')
             dt_est = dt_utc.astimezone(est)
-            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']
         
         body += f"""
                 <div class="alert-section">
-                    <h3>📊 Hour: {hour_key.replace('-', ' ')} - Instantel Micromate Alerts</h3>
+                    <h3>📊 Minute: {minute_key.replace('-', ' ')} - Instantel Micromate Alerts</h3>
         """
         
         for message in alert_data['messages']:
@@ -395,9 +371,6 @@ def _create_micromate_email_body(alerts_by_hour, project_name, instrument_detail
                                     </tr>
                                 </tbody>
                             </table>
-                            <p style="margin: 10px 0 0 0; font-size: 12px; color: #6c757d;">
-                                Based on {alert_data['readings_count']} readings in this hour
-                            </p>
                         </div>
                     </div>
             """
@@ -411,7 +384,7 @@ def _create_micromate_email_body(alerts_by_hour, project_name, instrument_detail
                     <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
                     <p style="margin: 5px 0 0 0; color: #495057;">
                         Please review the Instantel Micromate data and take appropriate action if necessary. 
-                        Values shown are the peak readings for each axis during the specified hour.
+                        Values shown are the actual readings for each axis at the time of threshold violation.
                         <br><br>
                         <strong>Project ID:</strong> 24252<br>
                         <strong>Instrument:</strong> Instantel 1

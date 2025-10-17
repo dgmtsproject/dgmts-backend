@@ -140,12 +140,12 @@ def check_and_send_tiltmeter_alerts():
             warning_emails = instrument.get('warning_emails') or []
             shutdown_emails = instrument.get('shutdown_emails') or []
 
-            # Check last 6 hours instead of just 1 hour to catch recent violations
-            six_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+            # Check last minute for immediate threshold checking
+            one_minute_ago = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
             readings_resp = supabase.table('sensor_readings') \
                 .select('*') \
                 .eq('node_id', node_id) \
-                .gte('timestamp', six_hours_ago) \
+                .gte('timestamp', one_minute_ago) \
                 .order('timestamp', desc=False) \
                 .execute()
             readings = readings_resp.data if readings_resp.data else []
@@ -157,19 +157,15 @@ def check_and_send_tiltmeter_alerts():
                 y = reading.get('y_value')
                 z = reading.get('z_value')
 
-                # Check if we've already sent for this timestamp within the last 6 hours
-                # This allows re-sending alerts for persistent threshold violations
-                six_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+                # Check if we've already sent for this exact timestamp
                 already_sent = supabase.table('sent_alerts') \
-                    .select('id, created_at') \
+                    .select('id') \
                     .eq('instrument_id', instrument_id) \
                     .eq('node_id', node_id) \
                     .eq('timestamp', timestamp) \
-                    .gte('created_at', six_hours_ago) \
                     .execute()
                 if already_sent.data:
-                    print(f"DEBUG: Alert already sent for node {node_id} at {timestamp} within the last 6 hours, skipping.")
-                    print(f"DEBUG: Found {len(already_sent.data)} existing alert records")
+                    print(f"DEBUG: Alert already sent for node {node_id} at {timestamp}, skipping.")
                     continue
 
                 # Format timestamp to EST
@@ -404,7 +400,7 @@ def _create_tiltmeter_email_body(node_alerts, node_ids, project_name, instrument
                 
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                     This is an automated alert notification from the DGMTS monitoring system. 
-                    The following tiltmeter thresholds have been exceeded in the last hour:
+                    The following tiltmeter thresholds have been exceeded in the last minute:
                 </p>
     """
     
@@ -485,13 +481,13 @@ def check_and_send_seismograph_alert():
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
 
-        # 2. Calculate time range for the last hour in EST
+        # 2. Calculate time range for the last minute in EST
         est = pytz.timezone('US/Eastern')
         now_est = datetime.now(est)
-        one_hour_ago_est = now_est - timedelta(hours=1)
+        one_minute_ago_est = now_est - timedelta(minutes=1)
         
         # Format dates for API
-        start_time = one_hour_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        start_time = one_minute_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
         end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
         
         print(f"Fetching seismograph data from {start_time} to {end_time} EST")
@@ -514,47 +510,27 @@ def check_and_send_seismograph_alert():
         background_data = data.get('data', [])
         
         if not background_data:
-            print("No background data received for the last hour")
+            print("No background data received for the last minute")
             return
 
-        # 4. Group data by hour and find highest values for each axis
-        hourly_data = {}
+        # 4. Check thresholds for each individual reading
+        alerts_by_minute = {}
         for entry in background_data:
             timestamp = entry[0]  # Format: "2025-08-01T15:40:37.741-04:00"
-            x_value = float(entry[1])
-            y_value = float(entry[2])
-            z_value = float(entry[3])
+            x_value = abs(float(entry[1]))
+            y_value = abs(float(entry[2]))
+            z_value = abs(float(entry[3]))
             
-            # Extract hour key (YYYY-MM-DD-HH)
+            # Extract minute key (YYYY-MM-DD-HH-MM)
             try:
                 dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                 dt_est = dt.astimezone(est)
-                hour_key = dt_est.strftime('%Y-%m-%d-%H')
+                minute_key = dt_est.strftime('%Y-%m-%d-%H-%M')
             except Exception as e:
                 print(f"Failed to parse timestamp {timestamp}: {e}")
                 continue
             
-            if hour_key not in hourly_data:
-                hourly_data[hour_key] = {
-                    'max_x': x_value,
-                    'max_y': y_value,
-                    'max_z': z_value,
-                    'timestamp': timestamp
-                }
-            else:
-                hourly_data[hour_key]['max_x'] = max(hourly_data[hour_key]['max_x'], abs(x_value))
-                hourly_data[hour_key]['max_y'] = max(hourly_data[hour_key]['max_y'], abs(y_value))
-                hourly_data[hour_key]['max_z'] = max(hourly_data[hour_key]['max_z'], abs(z_value))
-
-        # 5. Check thresholds for each hour
-        alerts_by_hour = {}
-        for hour_key, hour_data in hourly_data.items():
-            max_x = hour_data['max_x']
-            max_y = hour_data['max_y']
-            max_z = hour_data['max_z']
-            timestamp = hour_data['timestamp']
-            
-            # Check if we've already sent for this hour
+            # Check if we've already sent for this minute
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
                 .eq('instrument_id', 'SMG1') \
@@ -562,35 +538,35 @@ def check_and_send_seismograph_alert():
                 .eq('timestamp', timestamp) \
                 .execute()
             if already_sent.data:
-                print(f"Alert already sent for hour {hour_key}, skipping.")
+                print(f"Alert already sent for minute {minute_key}, skipping.")
                 continue
 
             messages = []
             
             # Check shutdown thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if shutdown_value and value >= shutdown_value:
                     messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value:.6f}")
             
             # Check warning thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if warning_value and value >= warning_value:
                     messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value:.6f}")
             
             # Check alert thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if alert_value and value >= alert_value:
                     messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value:.6f}")
 
             if messages:
-                alerts_by_hour[hour_key] = {
+                alerts_by_minute[minute_key] = {
                     'messages': messages,
                     'timestamp': timestamp,
-                    'max_values': {'X': max_x, 'Y': max_y, 'Z': max_z}
+                    'max_values': {'X': x_value, 'Y': y_value, 'Z': z_value}
                 }
 
         # 6. Send email if there are alerts
-        if alerts_by_hour:
+        if alerts_by_minute:
             # Get project information and instrument details for both SMG1 instruments from database
             project_names = []
             instrument_details = []
@@ -613,7 +589,7 @@ def check_and_send_seismograph_alert():
             else:
                 project_name = "ANC DAR BC and DGMTS Testing"  # Default fallback
                 
-            body = _create_seismograph_email_body(alerts_by_hour, "Seismograph", project_name, instrument_details)
+            body = _create_seismograph_email_body(alerts_by_minute, "Seismograph", project_name, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -623,10 +599,10 @@ def check_and_send_seismograph_alert():
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
             if all_emails:
                 send_email(",".join(all_emails), subject, body)
-                print(f"Sent seismograph alert email for {len(alerts_by_hour)} hours with alerts")
+                print(f"Sent seismograph alert email for {len(alerts_by_minute)} minutes with alerts")
                 
-                # Record that we've sent for each hour
-                for hour_key, alert_data in alerts_by_hour.items():
+                # Record that we've sent for each minute
+                for minute_key, alert_data in alerts_by_minute.items():
                     supabase.table('sent_alerts').insert({
                         'instrument_id': 'SMG1',
                         'node_id': 15092,
@@ -636,7 +612,7 @@ def check_and_send_seismograph_alert():
             else:
                 print("No alert/warning/shutdown emails configured for SMG1")
         else:
-            print("No thresholds crossed for any hour in the last hour.")
+            print("No thresholds crossed for any minute in the last minute.")
     except Exception as e:
         print(f"Error in check_and_send_seismograph_alert: {e}")
 
@@ -661,13 +637,13 @@ def check_and_send_smg3_seismograph_alert():
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
 
-        # 2. Calculate time range for the last hour in EST
+        # 2. Calculate time range for the last minute in EST
         est = pytz.timezone('US/Eastern')
         now_est = datetime.now(est)
-        one_hour_ago_est = now_est - timedelta(hours=1)
+        one_minute_ago_est = now_est - timedelta(minutes=1)
         
         # Format dates for API
-        start_time = one_hour_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        start_time = one_minute_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
         end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
         
         print(f"Fetching SMG-3 seismograph data from {start_time} to {end_time} EST")
@@ -690,46 +666,26 @@ def check_and_send_smg3_seismograph_alert():
         background_data = data.get('data', [])
         
         if not background_data:
-            print("No SMG-3 background data received for the last hour")
+            print("No SMG-3 background data received for the last minute")
             return
 
-        # 4. Group data by hour and find highest values for each axis
-        hourly_data = {}
+        # 4. Check thresholds for each individual reading
+        alerts_by_minute = {}
         for entry in background_data:
             timestamp = entry[0]  # Format: "2025-08-01T15:40:37.741-04:00"
-            x_value = float(entry[1])
-            y_value = float(entry[2])
-            z_value = float(entry[3])
+            x_value = abs(float(entry[1]))
+            y_value = abs(float(entry[2]))
+            z_value = abs(float(entry[3]))
             
-            # Extract hour key (YYYY-MM-DD-HH)
+            # Extract minute key (YYYY-MM-DD-HH-MM)
             try:
                 dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                 dt_est = dt.astimezone(est)
-                hour_key = dt_est.strftime('%Y-%m-%d-%H')
+                minute_key = dt_est.strftime('%Y-%m-%d-%H-%M')
             except Exception as e:
                 continue
             
-            if hour_key not in hourly_data:
-                hourly_data[hour_key] = {
-                    'max_x': x_value,
-                    'max_y': y_value,
-                    'max_z': z_value,
-                    'timestamp': timestamp
-                }
-            else:
-                hourly_data[hour_key]['max_x'] = max(hourly_data[hour_key]['max_x'], abs(x_value))
-                hourly_data[hour_key]['max_y'] = max(hourly_data[hour_key]['max_y'], abs(y_value))
-                hourly_data[hour_key]['max_z'] = max(hourly_data[hour_key]['max_z'], abs(z_value))
-
-        # 5. Check thresholds for each hour
-        alerts_by_hour = {}
-        for hour_key, hour_data in hourly_data.items():
-            max_x = hour_data['max_x']
-            max_y = hour_data['max_y']
-            max_z = hour_data['max_z']
-            timestamp = hour_data['timestamp']
-            
-            # Check if we've already sent for this hour
+            # Check if we've already sent for this minute
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
                 .eq('instrument_id', 'SMG-3') \
@@ -737,35 +693,35 @@ def check_and_send_smg3_seismograph_alert():
                 .eq('timestamp', timestamp) \
                 .execute()
             if already_sent.data:
-                print(f"SMG-3 alert already sent for hour {hour_key}, skipping.")
+                print(f"SMG-3 alert already sent for minute {minute_key}, skipping.")
                 continue
 
             messages = []
             
             # Check shutdown thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if shutdown_value and value >= shutdown_value:
                     messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value:.6f}")
             
             # Check warning thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if warning_value and value >= warning_value:
                     messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value:.6f}")
             
             # Check alert thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if alert_value and value >= alert_value:
                     messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value:.6f}")
 
             if messages:
-                alerts_by_hour[hour_key] = {
+                alerts_by_minute[minute_key] = {
                     'messages': messages,
                     'timestamp': timestamp,
-                    'max_values': {'X': max_x, 'Y': max_y, 'Z': max_z}
+                    'max_values': {'X': x_value, 'Y': y_value, 'Z': z_value}
                 }
 
         # 6. Send email if there are alerts
-        if alerts_by_hour:
+        if alerts_by_minute:
             # Get project information and instrument details for SMG-3 seismograph from database
             project_name = "Unknown Project"  # Default fallback
             instrument_details = []
@@ -778,7 +734,7 @@ def check_and_send_smg3_seismograph_alert():
             except Exception as e:
                 print(f"Error getting project info for SMG-3: {e}")
                 
-            body = _create_seismograph_email_body(alerts_by_hour, "ANC DAR-BC Seismograph", project_name, instrument_details)
+            body = _create_seismograph_email_body(alerts_by_minute, "ANC DAR-BC Seismograph", project_name, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -788,10 +744,10 @@ def check_and_send_smg3_seismograph_alert():
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
             if all_emails:
                 send_email(",".join(all_emails), subject, body)
-                print(f"Sent SMG-3 seismograph alert email for {len(alerts_by_hour)} hours with alerts")
+                print(f"Sent SMG-3 seismograph alert email for {len(alerts_by_minute)} minutes with alerts")
                 
-                # Record that we've sent for each hour
-                for hour_key, alert_data in alerts_by_hour.items():
+                # Record that we've sent for each minute
+                for minute_key, alert_data in alerts_by_minute.items():
                     supabase.table('sent_alerts').insert({
                         'instrument_id': 'SMG-3',
                         'node_id': 13453,
@@ -806,7 +762,7 @@ def check_and_send_smg3_seismograph_alert():
         print(f"Error in check_and_send_smg3_seismograph_alert: {e}")
         log_alert_event("ERROR", f"Error in check_and_send_smg3_seismograph_alert: {e}", 'SMG-3')
 
-def _create_seismograph_email_body(alerts_by_hour, seismograph_name, project_name, instrument_details):
+def _create_seismograph_email_body(alerts_by_minute, seismograph_name, project_name, instrument_details):
     """Create HTML email body for seismograph alerts"""
     # Format project name for display
     if " & " in project_name:
@@ -892,25 +848,25 @@ def _create_seismograph_email_body(alerts_by_hour, seismograph_name, project_nam
                 
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                     This is an automated alert notification from the DGMTS monitoring system. 
-                    The following {seismograph_name} thresholds have been exceeded in the last hour:
+                    The following {seismograph_name} thresholds have been exceeded in the last minute:
                 </p>
     """
     
-    # Add alerts for each hour
-    for hour_key, alert_data in alerts_by_hour.items():
+    # Add alerts for each minute
+    for minute_key, alert_data in alerts_by_minute.items():
         # Format timestamp to EST
         try:
             dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
             est = pytz.timezone('US/Eastern')
             dt_est = dt_utc.astimezone(est)
-            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']
         
         body += f"""
                 <div class="alert-section">
-                    <h3>📊 Hour: {hour_key.replace('-', ' ')} - {seismograph_name} Alerts</h3>
+                    <h3>📊 Minute: {minute_key.replace('-', ' ')} - {seismograph_name} Alerts</h3>
         """
         
         for message in alert_data['messages']:
@@ -963,7 +919,7 @@ def _create_seismograph_email_body(alerts_by_hour, seismograph_name, project_nam
                     <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
                     <p style="margin: 5px 0 0 0; color: #495057;">
                         Please review the {seismograph_name} data and take appropriate action if necessary. 
-                        Values shown are the maximum readings for each axis during the specified hour.
+                        Values shown are the actual readings for each axis at the time of threshold violation.
                     </p>
                 </div>
             </div>
