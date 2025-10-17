@@ -179,7 +179,7 @@ def check_and_send_micromate_alert():
             # Check if we've already sent for this interval
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
-                .eq('instrument_id', 'INSTANTEL-1') \
+                .eq('instrument_id', 'Instantel 1') \
                 .eq('node_id', 24252) \
                 .eq('timestamp', timestamp) \
                 .execute()
