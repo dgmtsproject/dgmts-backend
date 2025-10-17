@@ -16,8 +16,8 @@ def run_scheduler():
 def setup_scheduled_tasks():
     """Setup all scheduled tasks"""
     # Schedule to run every hour
-    schedule.every().minutes(30).do(fetch_and_store_all_sensor_data)
-    schedule.every().minutes(5).do(check_and_send_tiltmeter_alerts)
+    schedule.every(30).minutes.do(fetch_and_store_all_sensor_data)
+    schedule.every(5).minutes.do(check_and_send_tiltmeter_alerts)
     schedule.every().minute.do(check_and_send_seismograph_alert)
     schedule.every().minute.do(check_and_send_smg3_seismograph_alert)
     schedule.every().hour.do(check_and_send_micromate_alert)
