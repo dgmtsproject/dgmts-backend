@@ -97,13 +97,13 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
 
-        # 2. Calculate time range for the last 5 minutes in EST
+        # 2. Calculate time range for the last minute in EST
         est = pytz.timezone('US/Eastern')
         now_est = datetime.now(est)
-        five_minutes_ago_est = now_est - timedelta(minutes=5)
+        one_minute_ago_est = now_est - timedelta(minutes=1)
         
         # Format dates for API
-        start_time = five_minutes_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        start_time = one_minute_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
         end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
         
         print(f"Fetching {instrument_id} Rock Seismograph data from {start_time} to {end_time} EST")
@@ -150,57 +150,25 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         
         # Handle 204 No Content response
         if response.status_code == 204:
-            print(f"No data available for {instrument_id} in the last 5 minutes (204 No Content)")
+            print(f"No data available for {instrument_id} in the last minute (204 No Content)")
             return
 
         data = response.json()
         background_data = data.get('data', [])
         
         if not background_data:
-            print(f"No background data received for {instrument_id} in the last 5 minutes")
+            print(f"No background data received for {instrument_id} in the last minute")
             return
 
-        # 4. Group data by 5-minute intervals and find highest values for each axis
-        five_minute_data = {}
+        # 4. Check thresholds for each reading
+        alerts_by_timestamp = {}
         for entry in background_data:
             timestamp = entry[0]  # Format: "2025-08-01T15:40:37.741-04:00"
             x_value = abs(float(entry[1]))
             y_value = abs(float(entry[2]))
             z_value = abs(float(entry[3]))
             
-            # Extract 5-minute interval key (YYYY-MM-DD-HH-MM rounded to nearest 5)
-            try:
-                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                dt_est = dt.astimezone(est)
-                # Round to nearest 5-minute interval
-                minute = dt_est.minute
-                rounded_minute = (minute // 5) * 5
-                interval_key = dt_est.strftime('%Y-%m-%d-%H') + f'-{rounded_minute:02d}'
-            except Exception as e:
-                print(f"Failed to parse timestamp {timestamp}: {e}")
-                continue
-            
-            if interval_key not in five_minute_data:
-                five_minute_data[interval_key] = {
-                    'max_x': x_value,
-                    'max_y': y_value,
-                    'max_z': z_value,
-                    'timestamp': timestamp
-                }
-            else:
-                five_minute_data[interval_key]['max_x'] = max(five_minute_data[interval_key]['max_x'], x_value)
-                five_minute_data[interval_key]['max_y'] = max(five_minute_data[interval_key]['max_y'], y_value)
-                five_minute_data[interval_key]['max_z'] = max(five_minute_data[interval_key]['max_z'], z_value)
-
-        # 5. Check thresholds for each 5-minute interval
-        alerts_by_interval = {}
-        for interval_key, interval_data in five_minute_data.items():
-            max_x = interval_data['max_x']
-            max_y = interval_data['max_y']
-            max_z = interval_data['max_z']
-            timestamp = interval_data['timestamp']
-            
-            # Check if we've already sent for this interval
+            # Check if we've already sent for this timestamp
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
                 .eq('instrument_id', instrument_id) \
@@ -208,35 +176,35 @@ def check_and_send_rock_seismograph_alert(instrument_id):
                 .eq('timestamp', timestamp) \
                 .execute()
             if already_sent.data:
-                print(f"{instrument_id} alert already sent for interval {interval_key}, skipping.")
+                print(f"{instrument_id} alert already sent for timestamp {timestamp}, skipping.")
                 continue
 
             messages = []
             
             # Check shutdown thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if shutdown_value and value >= shutdown_value:
                     messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value:.6f}")
             
             # Check warning thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if warning_value and value >= warning_value:
                     messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value:.6f}")
             
             # Check alert thresholds
-            for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
                 if alert_value and value >= alert_value:
                     messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value:.6f}")
 
             if messages:
-                alerts_by_interval[interval_key] = {
+                alerts_by_timestamp[timestamp] = {
                     'messages': messages,
                     'timestamp': timestamp,
-                    'max_values': {'X': max_x, 'Y': max_y, 'Z': max_z}
+                    'values': {'X': x_value, 'Y': y_value, 'Z': z_value}
                 }
 
         # 6. Send email if there are alerts
-        if alerts_by_interval:
+        if alerts_by_timestamp:
             seismograph_name = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['name']
             
             # Get project information and instrument details from database
@@ -251,7 +219,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             except Exception as e:
                 print(f"Error getting project info for {instrument_id}: {e}")
                 
-            body = _create_rock_seismograph_email_body(alerts_by_interval, seismograph_name, project_name, instrument_id, instrument_details)
+            body = _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, project_name, instrument_id, instrument_details)
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est)
@@ -263,8 +231,8 @@ def check_and_send_rock_seismograph_alert(instrument_id):
                 email_sent = send_email(",".join(all_emails), subject, body)
                 if email_sent:
                     print(f"Alert email sent successfully for {instrument_id} to {len(all_emails)} recipients")
-                    # Record that we've sent for each interval
-                    for interval_key, alert_data in alerts_by_interval.items():
+                    # Record that we've sent for each timestamp
+                    for timestamp, alert_data in alerts_by_timestamp.items():
                         sent_alert_resp = supabase.table('sent_alerts').insert({
                             'instrument_id': instrument_id,
                             'node_id': device_id,  # Use device_id instead of project_id
@@ -277,14 +245,14 @@ def check_and_send_rock_seismograph_alert(instrument_id):
                 else:
                     log_alert_event("SEND EMAIL_FAILED", f"Failed to send alert email for {instrument_id}", instrument_id)
             else:
-              pass
+                print(f"No alert/warning/shutdown emails configured for {instrument_id}")
         else:
-            pass
+            print(f"No thresholds crossed for any reading in the last minute for {instrument_id}.")
     except Exception as e:
         print(f"Error in check_and_send_rock_seismograph_alert for {instrument_id}: {e}")
         log_alert_event("ERROR", f"Error in alert check for {instrument_id}: {str(e)}", instrument_id)
 
-def _create_rock_seismograph_email_body(alerts_by_interval, seismograph_name, project_name, instrument_id, instrument_details):
+def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, project_name, instrument_id, instrument_details):
     """Create HTML email body for Rock Seismograph alerts"""
     body = f"""
     <html>
@@ -362,14 +330,14 @@ def _create_rock_seismograph_email_body(alerts_by_interval, seismograph_name, pr
                     </table>
                 </div>
                 
-                <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
-                    This is an automated alert notification from the DGMTS monitoring system. 
-                    The following {seismograph_name} ({instrument_id}) thresholds have been exceeded in the last 5 minutes:
-                </p>
+        <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
+            This is an automated alert notification from the DGMTS monitoring system. 
+            The following {seismograph_name} ({instrument_id}) thresholds have been exceeded in real-time:
+        </p>
     """
     
-    # Add alerts for each 5-minute interval
-    for interval_key, alert_data in alerts_by_interval.items():
+    # Add alerts for each timestamp
+    for timestamp, alert_data in alerts_by_timestamp.items():
         # Format timestamp to EST
         try:
             dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
@@ -382,7 +350,7 @@ def _create_rock_seismograph_email_body(alerts_by_interval, seismograph_name, pr
         
         body += f"""
                 <div class="alert-section">
-                    <h3>📊 5-Minute Interval: {interval_key.replace('-', ' ')} - {seismograph_name} Alerts ({instrument_id})</h3>
+                    <h3>📊 Real-time Alert - {seismograph_name} ({instrument_id})</h3>
         """
         
         for message in alert_data['messages']:
@@ -408,18 +376,18 @@ def _create_rock_seismograph_email_body(alerts_by_interval, seismograph_name, pr
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr>
-                                        <td>X (Longitudinal)</td>
-                                        <td>{alert_data['max_values']['X']:.6f}</td>
-                                    </tr>
-                                    <tr>
-                                        <td>Y (Vertical)</td>
-                                        <td>{alert_data['max_values']['Y']:.6f}</td>
-                                    </tr>
-                                    <tr>
-                                        <td>Z (Transverse)</td>
-                                        <td>{alert_data['max_values']['Z']:.6f}</td>
-                                    </tr>
+                                           <tr>
+                                               <td>X (Longitudinal)</td>
+                                               <td>{alert_data['values']['X']:.6f}</td>
+                                           </tr>
+                                           <tr>
+                                               <td>Y (Vertical)</td>
+                                               <td>{alert_data['values']['Y']:.6f}</td>
+                                           </tr>
+                                           <tr>
+                                               <td>Z (Transverse)</td>
+                                               <td>{alert_data['values']['Z']:.6f}</td>
+                                           </tr>
                                 </tbody>
                             </table>
                         </div>
@@ -433,13 +401,13 @@ def _create_rock_seismograph_email_body(alerts_by_interval, seismograph_name, pr
     body += f"""
                 <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
                     <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
-                    <p style="margin: 5px 0 0 0; color: #495057;">
-                        Please review the {seismograph_name} data and take appropriate action if necessary. 
-                        Values shown are the maximum readings for each axis during the 5-minute interval.
-                        <br><br>
-                        <strong>Project:</strong> {project_name}<br>
-                        <strong>Instrument:</strong> {instrument_id}
-                    </p>
+            <p style="margin: 5px 0 0 0; color: #495057;">
+                Please review the {seismograph_name} data and take appropriate action if necessary. 
+                Values shown are the actual readings that exceeded thresholds.
+                <br><br>
+                <strong>Project:</strong> {project_name}<br>
+                <strong>Instrument:</strong> {instrument_id}
+            </p>
                 </div>
             </div>
             
