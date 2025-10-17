@@ -15,16 +15,16 @@ def run_scheduler():
 
 def setup_scheduled_tasks():
     """Setup all scheduled tasks"""
-    # Schedule to run every minute for immediate threshold checking
-    schedule.every().minute.do(fetch_and_store_all_sensor_data)
-    schedule.every().minute.do(check_and_send_tiltmeter_alerts)
-    schedule.every().minute.do(check_and_send_seismograph_alert)
-    schedule.every().minute.do(check_and_send_smg3_seismograph_alert)
-    schedule.every().minute.do(check_and_send_micromate_alert)
+    # Schedule to run every 5 minutes for threshold checking
+    schedule.every(5).minutes.do(fetch_and_store_all_sensor_data)
+    schedule.every(5).minutes.do(check_and_send_tiltmeter_alerts)
+    schedule.every(5).minutes.do(check_and_send_seismograph_alert)
+    schedule.every(5).minutes.do(check_and_send_smg3_seismograph_alert)
+    schedule.every(5).minutes.do(check_and_send_micromate_alert)
     
     # Schedule Rock Seismograph alerts for each instrument
     for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():
-        schedule.every().minute.do(check_and_send_rock_seismograph_alert, instrument_id)
+        schedule.every(5).minutes.do(check_and_send_rock_seismograph_alert, instrument_id)
 
 def start_scheduler():
     """Start the scheduler in a background thread"""
