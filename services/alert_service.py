@@ -469,7 +469,7 @@ def check_and_send_seismograph_alert():
     print("Checking seismograph alerts using background API...")
     try:
         # 1. Get instrument settings
-        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG1').execute()
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG-1').execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
             print("No instrument found for SMG1")
