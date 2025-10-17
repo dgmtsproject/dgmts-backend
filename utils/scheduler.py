@@ -24,7 +24,7 @@ def setup_scheduled_tasks():
     
     # Schedule Rock Seismograph alerts for each instrument
     for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():
-        schedule.every().hour.do(check_and_send_rock_seismograph_alert, instrument_id)
+        schedule.every().minute.do(check_and_send_rock_seismograph_alert, instrument_id)
 
 def start_scheduler():
     """Start the scheduler in a background thread"""
