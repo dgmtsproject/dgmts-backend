@@ -97,16 +97,19 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
 
-        # 2. Calculate time range for the last minute in EST
-        est = pytz.timezone('US/Eastern')
-        now_est = datetime.now(est)
+        # 2. Calculate time range for the last minute using UTC and convert to EST properly
+        utc_now = datetime.now(timezone.utc)
+        est_tz = pytz.timezone('US/Eastern')
+        now_est = utc_now.astimezone(est_tz)
         one_minute_ago_est = now_est - timedelta(minutes=1)
         
-        # Format dates for API
+        # Format dates for API (ensure proper timezone handling)
         start_time = one_minute_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
         end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
         
         print(f"Fetching {instrument_id} Rock Seismograph data from {start_time} to {end_time} EST")
+        print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
+        print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
 
         # 3. Fetch background data from Syscom API
         api_key = os.environ.get('SYSCOM_API_KEY')
@@ -222,7 +225,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             body = _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, project_name, instrument_id, instrument_details)
             
             current_time = datetime.now(timezone.utc)
-            current_time_est = current_time.astimezone(est)
+            current_time_est = current_time.astimezone(est_tz)
             formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
             subject = f"🌊 {seismograph_name} Alert Notification - {formatted_time}"
             
@@ -341,8 +344,8 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
         # Format timestamp to EST
         try:
             dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
-            est = pytz.timezone('US/Eastern')
-            dt_est = dt_utc.astimezone(est)
+            est_tz = pytz.timezone('US/Eastern')
+            dt_est = dt_utc.astimezone(est_tz)
             formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
