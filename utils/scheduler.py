@@ -17,10 +17,12 @@ def setup_scheduled_tasks():
     """Setup all scheduled tasks"""
     # Schedule to run every minute for real-time threshold checking
     schedule.every().minute.do(fetch_and_store_all_sensor_data)
-    schedule.every().minute.do(check_and_send_tiltmeter_alerts)
     schedule.every().minute.do(check_and_send_seismograph_alert)
     schedule.every().minute.do(check_and_send_smg3_seismograph_alert)
     schedule.every().minute.do(check_and_send_micromate_alert)
+    
+    # Tiltmeter alerts are now triggered automatically when new data is inserted
+    # No need for scheduled tiltmeter checks
     
     # Schedule Rock Seismograph alerts for each instrument
     for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():

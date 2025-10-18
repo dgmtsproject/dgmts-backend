@@ -28,10 +28,11 @@ def fetch_sensor_data_from_api(node_id):
         return []
 
 def store_sensor_data(data, node_id):
-    """Store simplified sensor data in Supabase"""
+    """Store simplified sensor data in Supabase and trigger tiltmeter alerts if new data"""
     try:
         print(f"Processing {len(data)} records for node {node_id}")
         stored_count = 0
+        new_data_inserted = False
         
         for i, reading in enumerate(data):
             # Only process til90ReadingsV1
@@ -74,7 +75,16 @@ def store_sensor_data(data, node_id):
             response = supabase.table('sensor_readings').insert(sensor_data).execute()
             print(f"Insert response: {response}")
             stored_count += 1
+            new_data_inserted = True
+        
         print(f"Successfully stored {stored_count} records for node {node_id}")
+        
+        # Trigger tiltmeter alert check if new data was inserted
+        if new_data_inserted and node_id in Config.SENSOR_NODES:
+            print(f"New tiltmeter data inserted for node {node_id}, triggering alert check...")
+            from services.alert_service import check_and_send_tiltmeter_alerts
+            check_and_send_tiltmeter_alerts()
+        
         return True
     except Exception as e:
         print(f"Error storing sensor data: {e}")

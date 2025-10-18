@@ -140,12 +140,12 @@ def check_and_send_tiltmeter_alerts():
             warning_emails = instrument.get('warning_emails') or []
             shutdown_emails = instrument.get('shutdown_emails') or []
 
-            # Check last minute for threshold checking
-            one_minute_ago = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+            # Check last hour for threshold checking (tiltmeters read every hour)
+            one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
             readings_resp = supabase.table('sensor_readings') \
                 .select('*') \
                 .eq('node_id', node_id) \
-                .gte('timestamp', one_minute_ago) \
+                .gte('timestamp', one_hour_ago) \
                 .order('timestamp', desc=False) \
                 .execute()
             readings = readings_resp.data if readings_resp.data else []
