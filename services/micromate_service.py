@@ -96,12 +96,19 @@ def check_and_send_micromate_alert():
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
 
-        # 2. Calculate time range for the last minute in EST
-        est = pytz.timezone('US/Eastern')
-        now_est = datetime.now(est)
-        one_minute_ago_est = now_est - timedelta(minutes=1)
+        # 2. Calculate time range for the last minute using UTC and convert to EST properly
+        # Account for instrument clock being 1 hour behind EST
+        utc_now = datetime.now(timezone.utc)
+        est_tz = pytz.timezone('US/Eastern')
+        now_est = utc_now.astimezone(est_tz)
+        # Subtract 1 hour to account for instrument clock being behind
+        now_instrument_time = now_est - timedelta(hours=1)
+        one_minute_ago_instrument_time = now_instrument_time - timedelta(minutes=1)
         
-        print(f"Fetching Micromate data from {one_minute_ago_est.strftime('%Y-%m-%dT%H:%M:%S')} to {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
+        print(f"Fetching Micromate data from {one_minute_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
+        print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
+        print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
+        print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
 
         # 3. Fetch data from Micromate API
         url = "https://imsite.dullesgeotechnical.com/api/micromate/readings"
@@ -128,10 +135,10 @@ def check_and_send_micromate_alert():
                 # Parse timestamp
                 timestamp_str = reading['Time']
                 dt_utc = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                dt_est = dt_utc.astimezone(est)
+                dt_est = dt_utc.astimezone(est_tz)
                 
-                # Check if reading is within the last minute
-                if dt_est < one_minute_ago_est or dt_est > now_est:
+                # Check if reading is within the last minute (using instrument time)
+                if dt_est < one_minute_ago_instrument_time or dt_est > now_instrument_time:
                     continue
                 
                 # Get values
