@@ -128,71 +128,77 @@ def check_and_send_micromate_alert():
 
         print(f"Received {len(micromate_readings)} Micromate data points")
 
-        # 4. Filter data for the last minute and check thresholds
+        # 4. Check thresholds for the most recent reading (Micromate reads every 5 minutes)
         alerts_by_timestamp = {}
+        
+        # Find the most recent reading
+        most_recent_reading = None
+        most_recent_time = None
+        
         for reading in micromate_readings:
             try:
-                # Parse timestamp
                 timestamp_str = reading['Time']
                 dt_utc = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                 dt_est = dt_utc.astimezone(est_tz)
                 
-                # Check if reading is within the last minute (using instrument time)
-                if dt_est < one_minute_ago_instrument_time or dt_est > now_instrument_time:
-                    continue
-                
-                # Get values
-                longitudinal = abs(float(reading['Longitudinal']))
-                transverse = abs(float(reading['Transverse']))
-                vertical = abs(float(reading['Vertical']))
-                
-                # Check if we've already sent for this timestamp
-                already_sent = supabase.table('sent_alerts') \
-                    .select('id') \
-                    .eq('instrument_id', 'Instantel 1') \
-                    .eq('node_id', 24252) \
-                    .eq('timestamp', timestamp_str) \
-                    .execute()
-                if already_sent.data:
-                    print(f"Micromate alert already sent for timestamp {timestamp_str}, skipping.")
-                    continue
-
-                messages = []
-                
-                # Check shutdown thresholds
-                for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
-                    if shutdown_value and value >= shutdown_value:
-                        messages.append(f"<b>Shutdown threshold reached on {axis_desc} axis:</b> {value:.6f}")
-                
-                # Check warning thresholds
-                for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
-                    if warning_value and value >= warning_value:
-                        messages.append(f"<b>Warning threshold reached on {axis_desc} axis:</b> {value:.6f}")
-                
-                # Check alert thresholds
-                for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
-                    if alert_value and value >= alert_value:
-                        messages.append(f"<b>Alert threshold reached on {axis_desc} axis:</b> {value:.6f}")
-
-                if messages:
-                    alerts_by_timestamp[timestamp_str] = {
-                        'messages': messages,
-                        'timestamp': timestamp_str,
-                        'values': {
-                            'Longitudinal': longitudinal, 
-                            'Transverse': transverse, 
-                            'Vertical': vertical
-                        }
-                    }
+                if most_recent_time is None or dt_est > most_recent_time:
+                    most_recent_time = dt_est
+                    most_recent_reading = reading
                     
             except Exception as e:
-                print(f"Failed to process reading: {e}")
-                log_alert_event("ERROR", f"Failed to process reading: {e}", 'Instantel 1')
+                print(f"Failed to parse timestamp: {e}")
                 continue
-
-        if not alerts_by_timestamp:
-            print("No Micromate data found for the last minute")
+        
+        if not most_recent_reading:
+            print("No valid Micromate readings found")
             return
+            
+        print(f"Most recent Micromate reading: {most_recent_reading['Time']} ({most_recent_time.strftime('%Y-%m-%d %H:%M:%S')} EST)")
+        
+        # Check thresholds for the most recent reading
+        timestamp_str = most_recent_reading['Time']
+        longitudinal = abs(float(most_recent_reading['Longitudinal']))
+        transverse = abs(float(most_recent_reading['Transverse']))
+        vertical = abs(float(most_recent_reading['Vertical']))
+        
+        # Check if we've already sent for this timestamp
+        already_sent = supabase.table('sent_alerts') \
+            .select('id') \
+            .eq('instrument_id', 'Instantel 1') \
+            .eq('node_id', 24252) \
+            .eq('timestamp', timestamp_str) \
+            .execute()
+        if already_sent.data:
+            print(f"Micromate alert already sent for timestamp {timestamp_str}, skipping.")
+            return
+
+        messages = []
+        
+        # Check shutdown thresholds
+        for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+            if shutdown_value and value >= shutdown_value:
+                messages.append(f"<b>Shutdown threshold reached on {axis_desc} axis:</b> {value:.6f}")
+        
+        # Check warning thresholds
+        for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+            if warning_value and value >= warning_value:
+                messages.append(f"<b>Warning threshold reached on {axis_desc} axis:</b> {value:.6f}")
+        
+        # Check alert thresholds
+        for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+            if alert_value and value >= alert_value:
+                messages.append(f"<b>Alert threshold reached on {axis_desc} axis:</b> {value:.6f}")
+
+        if messages:
+            alerts_by_timestamp[timestamp_str] = {
+                'messages': messages,
+                'timestamp': timestamp_str,
+                'values': {
+                    'Longitudinal': longitudinal, 
+                    'Transverse': transverse, 
+                    'Vertical': vertical
+                }
+            }
 
         # 6. Send email if there are alerts
         if alerts_by_timestamp:
