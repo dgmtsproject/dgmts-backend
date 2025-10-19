@@ -310,20 +310,310 @@ def test_tiltmeter_alert():
     except Exception as e:
         return jsonify({"error": f"Failed to send tiltmeter alert: {str(e)}"}), 500
 
-# TEMPORARILY DISABLED - Tiltmeter alerts are disabled
-# @email_bp.route('/trigger-tiltmeter-alerts', methods=['POST'])
-# def trigger_tiltmeter_alerts():
-#     """Manually trigger the actual tiltmeter alert system"""
-#     try:
-#         print("Manually triggering tiltmeter alert system...")
-#         check_and_send_tiltmeter_alerts()
-#         return jsonify({
-#             "message": "Tiltmeter alert system triggered successfully",
-#             "status": "success"
-#         })
-#     except Exception as e:
-#         print(f"Error triggering tiltmeter alerts: {e}")
-#         return jsonify({"error": f"Failed to trigger tiltmeter alerts: {str(e)}"}), 500
+@email_bp.route('/trigger-tiltmeter-alerts', methods=['POST'])
+def trigger_tiltmeter_alerts():
+    """Manually trigger the actual tiltmeter alert system"""
+    try:
+        print("Manually triggering tiltmeter alert system...")
+        check_and_send_tiltmeter_alerts()
+        return jsonify({
+            "message": "Tiltmeter alert system triggered successfully",
+            "status": "success"
+        })
+    except Exception as e:
+        print(f"Error triggering tiltmeter alerts: {e}")
+        return jsonify({"error": f"Failed to trigger tiltmeter alerts: {str(e)}"}), 500
+
+@email_bp.route('/test-tiltmeter-alerts-with-time-based-refs', methods=['POST'])
+def test_tiltmeter_alerts_with_time_based_refs():
+    """Test endpoint to trigger tiltmeter alerts and see time-based reference system in action"""
+    try:
+        # Get email addresses from request body for testing
+        data = request.get_json() or {}
+        test_emails = data.get('emails', [])
+        
+        # Ensure test_emails is a list
+        if isinstance(test_emails, str):
+            test_emails = [email.strip() for email in test_emails.split(',') if email.strip()]
+        elif not isinstance(test_emails, list):
+            test_emails = []
+        
+        print("🧪 Testing Tiltmeter Alerts with Time-Based References")
+        print("=" * 60)
+        
+        if test_emails:
+            print(f"📧 Test emails provided: {', '.join(test_emails)}")
+        else:
+            print("📧 No test emails provided - will use configured alert emails")
+        
+        # First show the time-based reference system test
+        from services.alert_service import test_time_based_reference_system
+        test_time_based_reference_system()
+        
+        print("\n" + "=" * 60)
+        print("🚨 Now triggering actual tiltmeter alerts...")
+        print("=" * 60)
+        
+        # Then trigger the actual alert system
+        check_and_send_tiltmeter_alerts()
+        
+        return jsonify({
+            "message": "Tiltmeter alert test completed successfully - check console logs for time-based reference details",
+            "status": "success",
+            "note": "Check your email and console logs to see the time-based reference system in action",
+            "test_emails_used": test_emails if test_emails else "Using configured alert emails"
+        })
+    except Exception as e:
+        print(f"Error testing tiltmeter alerts with time-based references: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to test tiltmeter alerts: {str(e)}"}), 500
+
+@email_bp.route('/test-time-based-references', methods=['POST'])
+def test_time_based_references():
+    """Test endpoint to verify the time-based reference system"""
+    try:
+        from services.alert_service import test_time_based_reference_system
+        print("Testing time-based reference system...")
+        test_time_based_reference_system()
+        return jsonify({
+            "message": "Time-based reference system test completed successfully",
+            "status": "success"
+        })
+    except Exception as e:
+        print(f"Error testing time-based references: {e}")
+        return jsonify({"error": f"Failed to test time-based references: {str(e)}"}), 500
+
+@email_bp.route('/test-tiltmeter-alert-simple', methods=['POST'])
+def test_tiltmeter_alert_simple():
+    """Test endpoint to send a sample tiltmeter alert email with time-based references"""
+    try:
+        # Get email addresses from request body
+        data = request.get_json() or {}
+        test_emails = data.get('emails', ['mahmerraza19@gmail.com'])
+        
+        # Ensure test_emails is a list
+        if isinstance(test_emails, str):
+            test_emails = [email.strip() for email in test_emails.split(',') if email.strip()]
+        elif not isinstance(test_emails, list):
+            test_emails = ['mahmerraza19@gmail.com']
+        
+        print(f"🧪 Testing Tiltmeter Alert with Time-Based References")
+        print(f"📧 Sending to: {', '.join(test_emails)}")
+        
+        # First show the time-based reference system test
+        from services.alert_service import test_time_based_reference_system
+        test_time_based_reference_system()
+        
+        # Get latest sensor readings for both nodes
+        node_ids = [142939, 143969]
+        actual_alerts = {}
+        
+        for node_id in node_ids:
+            instrument_id = Config.NODE_TO_INSTRUMENT_ID.get(node_id)
+            if not instrument_id:
+                continue
+                
+            # Get instrument settings
+            instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
+            instrument = instrument_resp.data[0] if instrument_resp.data else None
+            if not instrument:
+                continue
+            
+            # Get time-based reference values first, then fallback to global
+            from services.alert_service import get_time_based_reference_values
+            time_based_ref = get_time_based_reference_values(instrument_id)
+            
+            if time_based_ref:
+                reference_values = time_based_ref
+                print(f"Using time-based reference values for {instrument_id}")
+            else:
+                # Fall back to global reference values
+                reference_resp = supabase.table('reference_values').select('*').eq('instrument_id', instrument_id).execute()
+                reference_values = reference_resp.data[0] if reference_resp.data else None
+                if reference_values:
+                    print(f"Using global reference values for {instrument_id}")
+                else:
+                    print(f"No reference values found for {instrument_id}")
+            
+            # Get latest sensor reading for this node
+            latest_resp = supabase.table('sensor_readings') \
+                .select('*') \
+                .eq('node_id', node_id) \
+                .order('timestamp', desc=True) \
+                .limit(1) \
+                .execute()
+            latest_reading = latest_resp.data[0] if latest_resp.data else None
+            
+            if not latest_reading:
+                print(f"No readings found for node {node_id}")
+                continue
+            
+            # Get threshold values
+            xyz_alert_values = instrument.get('x_y_z_alert_values')
+            xyz_warning_values = instrument.get('x_y_z_warning_values')
+            xyz_shutdown_values = instrument.get('x_y_z_shutdown_values')
+            
+            # Extract values
+            x = latest_reading.get('x_value')
+            y = latest_reading.get('y_value')
+            z = latest_reading.get('z_value')
+            timestamp = latest_reading.get('timestamp')
+            
+            # Format timestamp
+            try:
+                dt_utc = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                est = pytz.timezone('US/Eastern')
+                dt_est = dt_utc.astimezone(est)
+                formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+            except Exception as e:
+                formatted_time = timestamp
+            
+            messages = []
+            
+            # Calculate calibrated values when reference values are enabled
+            if reference_values and reference_values.get('enabled', False):
+                ref_x = reference_values.get('x_reference_value') or 0
+                ref_y = reference_values.get('y_reference_value') or 0
+                ref_z = reference_values.get('z_reference_value') or 0
+                
+                # Calculate calibrated values (raw - reference)
+                calibrated_x = x - ref_x if x is not None else None
+                calibrated_y = y - ref_y if y is not None else None
+                calibrated_z = z - ref_z if z is not None else None
+                
+                ref_type = "time-based" if reference_values.get('time_based', False) else "global"
+                print(f"Reference values enabled for {instrument_id} ({ref_type}): X={ref_x}, Y={ref_y}, Z={ref_z}")
+                if reference_values.get('time_based', False):
+                    print(f"Time-based period: {reference_values.get('from_date')} to {reference_values.get('to_date')}")
+                print(f"Raw values: X={x}, Y={y}, Z={z}")
+                print(f"Calibrated values: X={calibrated_x}, Y={calibrated_y}, Z={calibrated_z}")
+                
+                # Check thresholds using calibrated values (X and Z only, no Y)
+                for axis, calibrated_value, axis_key, axis_desc in [('X', calibrated_x, 'x', 'Longitudinal'), ('Z', calibrated_z, 'z', 'Transverse')]:
+                    if calibrated_value is None:
+                        continue
+                    
+                    # Check shutdown thresholds
+                    axis_shutdown_value = xyz_shutdown_values.get(axis_key) if xyz_shutdown_values else None
+                    if axis_shutdown_value and abs(calibrated_value) >= axis_shutdown_value:
+                        messages.append(f"<b>Shutdown threshold reached on {axis}-axis ({axis_desc}) > {axis_shutdown_value:.3f}: value- {calibrated_value:.6f} at {formatted_time}</b>")
+                    
+                    # Check warning thresholds
+                    axis_warning_value = xyz_warning_values.get(axis_key) if xyz_warning_values else None
+                    if axis_warning_value and abs(calibrated_value) >= axis_warning_value:
+                        messages.append(f"<b>Warning threshold reached on {axis}-axis ({axis_desc}) > {axis_warning_value:.3f}: value- {calibrated_value:.6f} at {formatted_time}</b>")
+                    
+                    # Check alert thresholds
+                    axis_alert_value = xyz_alert_values.get(axis_key) if xyz_alert_values else None
+                    if axis_alert_value and abs(calibrated_value) >= axis_alert_value:
+                        messages.append(f"<b>Alert threshold reached on {axis}-axis ({axis_desc}) > {axis_alert_value:.3f}: value- {calibrated_value:.6f} at {formatted_time}</b>")
+            else:
+                # Use original logic when reference values are not enabled
+                for axis, value, axis_key, axis_desc in [('X', x, 'x', 'Longitudinal'), ('Z', z, 'z', 'Transverse')]:
+                    if value is None:
+                        continue
+                    
+                    # Check shutdown thresholds
+                    axis_shutdown_value = xyz_shutdown_values.get(axis_key) if xyz_shutdown_values else None
+                    if axis_shutdown_value and abs(value) >= axis_shutdown_value:
+                        messages.append(f"<b>Shutdown threshold reached on {axis}-axis ({axis_desc}) > {axis_shutdown_value:.3f}: value- {value:.6f} at {formatted_time}</b>")
+                    
+                    # Check warning thresholds
+                    axis_warning_value = xyz_warning_values.get(axis_key) if xyz_warning_values else None
+                    if axis_warning_value and abs(value) >= axis_warning_value:
+                        messages.append(f"<b>Warning threshold reached on {axis}-axis ({axis_desc}) > {axis_warning_value:.3f}: value- {value:.6f} at {formatted_time}</b>")
+                    
+                    # Check alert thresholds
+                    axis_alert_value = xyz_alert_values.get(axis_key) if xyz_alert_values else None
+                    if axis_alert_value and abs(value) >= axis_alert_value:
+                        messages.append(f"<b>Alert threshold reached on {axis}-axis ({axis_desc}) > {axis_alert_value:.3f}: value- {value:.6f} at {formatted_time}</b>")
+            
+            if messages:
+                actual_alerts[node_id] = [f"<u><b>Timestamp: {formatted_time}</b></u><br>" + "<br>".join(messages)]
+        
+        if actual_alerts:
+            # Create email body
+            body = f"""
+            <html>
+            <head>
+                <style>
+                    body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }}
+                    .container {{ max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }}
+                    .header {{ background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }}
+                    .header h1 {{ margin: 0; font-size: 24px; font-weight: bold; }}
+                    .header p {{ margin: 5px 0 0 0; opacity: 0.9; }}
+                    .content {{ padding: 30px; }}
+                    .alert-section {{ margin-bottom: 25px; }}
+                    .alert-section h3 {{ color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }}
+                    .alert-item {{ background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }}
+                    .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; font-size: 14px; }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>🚨 Tiltmeter Alert</h1>
+                        <p>Dulles Airport Monitoring System</p>
+                    </div>
+                    <div class="content">
+                        <div class="alert-section">
+                            <h3>Alert Details</h3>
+            """
+            
+            for node_id, node_messages in actual_alerts.items():
+                body += f"<h4>Node {node_id}</h4>"
+                for message in node_messages:
+                    body += f'<div class="alert-item">{message}</div>'
+            
+            body += """
+                        </div>
+                    </div>
+                    <div class="footer">
+                        <p>This is a test alert to verify the time-based reference system.</p>
+                        <p>Dulles Geotechnical Monitoring & Testing Services</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            
+            # Format current time for subject
+            try:
+                current_time = datetime.now(pytz.timezone('US/Eastern'))
+                formatted_current_time = current_time.strftime('%Y-%m-%d %I:%M %p EST')
+            except Exception as e:
+                formatted_current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+            
+            subject = f"🚨 Tiltmeter Alert Notification - {formatted_current_time}"
+            
+            # Send email to all test emails
+            for email in test_emails:
+                if send_email(email, subject, body):
+                    print(f"✅ Test alert email sent successfully to {email}")
+                else:
+                    print(f"❌ Failed to send test alert email to {email}")
+            
+            return jsonify({
+                "message": "Test tiltmeter alert sent successfully",
+                "status": "success",
+                "emails_sent_to": test_emails,
+                "alerts_found": len(actual_alerts),
+                "note": "Check console logs for time-based reference system details"
+            })
+        else:
+            return jsonify({
+                "message": "No alerts found - thresholds not exceeded",
+                "status": "success",
+                "emails_sent_to": test_emails,
+                "note": "Check console logs for time-based reference system details"
+            })
+            
+    except Exception as e:
+        print(f"Error in test tiltmeter alert: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to send test tiltmeter alert: {str(e)}"}), 500
 
 @email_bp.route('/test-seismograph-alert', methods=['POST'])
 def test_seismograph_alert():

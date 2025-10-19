@@ -63,6 +63,17 @@ def store_sensor_data(data, node_id):
 
             print(f"Extracted values - X: {x_value}, Y: {y_value}, Z: {z_value}")
 
+            # Check if this record already exists (prevent duplicates)
+            existing_check = supabase.table('sensor_readings') \
+                .select('id') \
+                .eq('node_id', node_id) \
+                .eq('timestamp', timestamp) \
+                .execute()
+            
+            if existing_check.data:
+                print(f"Record already exists for node {node_id} at {timestamp}, skipping insertion")
+                continue
+
             # Prepare data for insertion
             sensor_data = {
                 'node_id': node_id,
@@ -71,7 +82,7 @@ def store_sensor_data(data, node_id):
                 'y_value': y_value,
                 'z_value': z_value
             }
-            print(f"Inserting data: {sensor_data}")
+            print(f"Inserting new data: {sensor_data}")
             response = supabase.table('sensor_readings').insert(sensor_data).execute()
             print(f"Insert response: {response}")
             stored_count += 1
@@ -80,11 +91,10 @@ def store_sensor_data(data, node_id):
         print(f"Successfully stored {stored_count} records for node {node_id}")
         
         # Trigger tiltmeter alert check if new data was inserted
-        # TEMPORARILY DISABLED - Tiltmeter alerts are disabled
-        # if new_data_inserted and node_id in Config.SENSOR_NODES:
-        #     print(f"New tiltmeter data inserted for node {node_id}, triggering alert check...")
-        #     from services.alert_service import check_and_send_tiltmeter_alerts
-        #     check_and_send_tiltmeter_alerts()
+        if new_data_inserted and node_id in Config.SENSOR_NODES:
+            print(f"New tiltmeter data inserted for node {node_id}, triggering alert check...")
+            from services.alert_service import check_and_send_tiltmeter_alerts
+            check_and_send_tiltmeter_alerts()
         
         return True
     except Exception as e:

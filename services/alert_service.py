@@ -1,26 +1,29 @@
 """
 Alert Service for DGMS Backend
 
-IMPORTANT: TILTMETER ALERTS ARE TEMPORARILY DISABLED
-====================================================
+TILTMETER ALERTS ARE NOW ENABLED WITH TIME-BASED REFERENCE SYSTEM
+===============================================================
 
-To temporarily disable tiltmeter alerts, the following changes were made:
+The tiltmeter alert system now includes:
 
-1. In services/sensor_service.py (lines 82-87):
-   - Commented out the automatic tiltmeter alert trigger when new data is inserted
-   - This prevents alerts from being sent when new tiltmeter readings are stored
+1. TIME-BASED REFERENCE VALUES:
+   - Checks time_based_reference_values table for active periods
+   - Uses reference values based on current datetime
+   - Falls back to global reference_values table if no active period
 
-2. In routes/email_routes.py (lines 313-326):
-   - Commented out the manual trigger endpoint '/trigger-tiltmeter-alerts'
-   - This prevents manual triggering of tiltmeter alerts via API
+2. AUTOMATIC TRIGGERS:
+   - In services/sensor_service.py: Triggers when new tiltmeter data is inserted
+   - Uses the new time-based reference system automatically
 
-TO RE-ENABLE TILTMETER ALERTS:
-==============================
-1. Uncomment lines 84-87 in services/sensor_service.py
-2. Uncomment lines 314-326 in routes/email_routes.py
-3. Remove this comment block
+3. MANUAL TRIGGERS:
+   - /trigger-tiltmeter-alerts: Manual trigger endpoint
+   - /test-tiltmeter-alerts-with-time-based-refs: Test endpoint with detailed logging
 
-The check_and_send_tiltmeter_alerts() function itself remains intact and functional.
+4. TESTING:
+   - /test-time-based-references: Test only the reference system
+   - Console logs show which reference values are being used (time-based vs global)
+
+The check_and_send_tiltmeter_alerts() function now uses the enhanced time-based reference system.
 """
 
 import os
@@ -48,6 +51,117 @@ def log_alert_event(log_type, log_text, instrument_id, log_reference_alert=None)
         print(f"Logged: {log_type} - {log_text}")
     except Exception as e:
         print(f"Failed to log alert event: {e}")
+
+def get_time_based_reference_values(instrument_id, current_datetime=None):
+    """
+    Get time-based reference values for the given instrument_id and current datetime.
+    
+    Args:
+        instrument_id (str): The instrument ID (e.g., 'TILT-142939', 'TILT-143969')
+        current_datetime (datetime): Current datetime to check against periods. 
+                                   If None, uses current UTC time.
+    
+    Returns:
+        dict: Reference values dict with keys: x_reference_value, y_reference_value, z_reference_value
+              Returns None if no active period found
+    """
+    if current_datetime is None:
+        current_datetime = datetime.now(timezone.utc)
+    
+    try:
+        print(f"Checking time-based reference values for {instrument_id} at {current_datetime}")
+        
+        # Query time_based_reference_values table for active periods
+        response = supabase.table('time_based_reference_values') \
+            .select('*') \
+            .eq('instrument_id', instrument_id) \
+            .execute()
+        
+        if not response.data:
+            print(f"No time-based reference values found for {instrument_id}")
+            return None
+        
+        # Find the active period that contains the current datetime
+        active_period = None
+        for period in response.data:
+            from_date = period.get('from_date')
+            to_date = period.get('to_date')
+            
+            print(f"DEBUG: Processing period {period.get('id')} - from_date: {from_date} (type: {type(from_date)}), to_date: {to_date} (type: {type(to_date)})")
+            
+            # Convert string dates to datetime objects if they exist
+            if from_date:
+                if isinstance(from_date, str):
+                    # Handle different string formats
+                    if 'T' in from_date:
+                        if from_date.endswith('Z'):
+                            from_date = datetime.fromisoformat(from_date.replace('Z', '+00:00'))
+                        else:
+                            # String format like "2025-07-22T00:00:00" - add timezone
+                            from_date = datetime.fromisoformat(from_date).replace(tzinfo=timezone.utc)
+                    else:
+                        # Handle date-only format by adding timezone
+                        from_date = datetime.fromisoformat(from_date).replace(tzinfo=timezone.utc)
+                elif hasattr(from_date, 'tzinfo') and from_date.tzinfo is None:
+                    # If it's a naive datetime, make it timezone-aware
+                    from_date = from_date.replace(tzinfo=timezone.utc)
+            
+            if to_date:
+                if isinstance(to_date, str):
+                    # Handle different string formats
+                    if 'T' in to_date:
+                        if to_date.endswith('Z'):
+                            to_date = datetime.fromisoformat(to_date.replace('Z', '+00:00'))
+                        else:
+                            # String format like "2025-10-10T07:00:00" - add timezone
+                            to_date = datetime.fromisoformat(to_date).replace(tzinfo=timezone.utc)
+                    else:
+                        # Handle date-only format by adding timezone
+                        to_date = datetime.fromisoformat(to_date).replace(tzinfo=timezone.utc)
+                elif hasattr(to_date, 'tzinfo') and to_date.tzinfo is None:
+                    # If it's a naive datetime, make it timezone-aware
+                    to_date = to_date.replace(tzinfo=timezone.utc)
+            
+            # Check if current datetime falls within this period
+            period_active = True
+            
+            print(f"DEBUG: After conversion - from_date: {from_date} (type: {type(from_date)}), to_date: {to_date} (type: {type(to_date)})")
+            print(f"DEBUG: Current datetime: {current_datetime} (type: {type(current_datetime)})")
+            
+            if from_date and current_datetime < from_date:
+                print(f"DEBUG: Period not active - current time {current_datetime} is before from_date {from_date}")
+                period_active = False
+            
+            if to_date and current_datetime > to_date:
+                print(f"DEBUG: Period not active - current time {current_datetime} is after to_date {to_date}")
+                period_active = False
+            
+            if period_active:
+                active_period = period
+                print(f"Found active period for {instrument_id}: {from_date} to {to_date}")
+                break
+            else:
+                print(f"DEBUG: Period {period.get('id')} is not active")
+        
+        if active_period:
+            # Return the reference values in the format expected by the existing code
+            return {
+                'x_reference_value': active_period.get('x_reference_value'),
+                'y_reference_value': active_period.get('y_reference_value'),
+                'z_reference_value': active_period.get('z_reference_value'),
+                'enabled': True,
+                'time_based': True,
+                'period_id': active_period.get('id'),
+                'from_date': active_period.get('from_date'),
+                'to_date': active_period.get('to_date')
+            }
+        else:
+            print(f"No active time-based period found for {instrument_id} at {current_datetime}")
+            return None
+            
+    except Exception as e:
+        print(f"Error getting time-based reference values for {instrument_id}: {e}")
+        return None
 
 def get_project_info(instrument_id):
     """Get project information and instrument details for an instrument from the database"""
@@ -103,6 +217,62 @@ def get_project_info(instrument_id):
         log_alert_event("ERROR", f"Error fetching project info for {instrument_id}: {e}", instrument_id)
         return None
 
+def test_time_based_reference_system():
+    """
+    Test function to verify the time-based reference system works correctly.
+    This function can be called manually to test different scenarios.
+    """
+    print("🧪 Testing Time-Based Reference System")
+    print("=" * 50)
+    
+    # Test with current datetime
+    current_time = datetime.now(timezone.utc)
+    print(f"Current datetime: {current_time}")
+    
+    # Test both tiltmeter instruments
+    test_instruments = ['TILT-142939', 'TILT-143969']
+    
+    for instrument_id in test_instruments:
+        print(f"\n📊 Testing {instrument_id}:")
+        
+        # Test with current datetime
+        ref_values = get_time_based_reference_values(instrument_id, current_time)
+        if ref_values:
+            print(f"  ✅ Found time-based reference values:")
+            print(f"    X: {ref_values.get('x_reference_value')}")
+            print(f"    Y: {ref_values.get('y_reference_value')}")
+            print(f"    Z: {ref_values.get('z_reference_value')}")
+            print(f"    Period: {ref_values.get('from_date')} to {ref_values.get('to_date')}")
+        else:
+            print(f"  ❌ No time-based reference values found")
+            
+            # Test fallback to global reference values
+            reference_resp = supabase.table('reference_values').select('*').eq('instrument_id', instrument_id).execute()
+            global_ref = reference_resp.data[0] if reference_resp.data else None
+            if global_ref:
+                print(f"  🔄 Fallback to global reference values:")
+                print(f"    X: {global_ref.get('reference_x_value')}")
+                print(f"    Y: {global_ref.get('reference_y_value')}")
+                print(f"    Z: {global_ref.get('reference_z_value')}")
+            else:
+                print(f"  ❌ No global reference values found either")
+        
+        # Test with a specific datetime (example: 2025-10-19 00:01:20)
+        test_datetime = datetime(2025, 10, 19, 0, 1, 20, tzinfo=timezone.utc)
+        print(f"\n  🕐 Testing with specific datetime: {test_datetime}")
+        ref_values_test = get_time_based_reference_values(instrument_id, test_datetime)
+        if ref_values_test:
+            print(f"    ✅ Found time-based reference values for test datetime:")
+            print(f"      X: {ref_values_test.get('x_reference_value')}")
+            print(f"      Y: {ref_values_test.get('y_reference_value')}")
+            print(f"      Z: {ref_values_test.get('z_reference_value')}")
+            print(f"      Period: {ref_values_test.get('from_date')} to {ref_values_test.get('to_date')}")
+        else:
+            print(f"    ❌ No time-based reference values found for test datetime")
+    
+    print("\n" + "=" * 50)
+    print("🎉 Time-based reference system test completed!")
+
 def check_and_send_tiltmeter_alerts():
     """Check tiltmeter alerts and send emails if thresholds are exceeded"""
     print("Checking tiltmeter alerts for both nodes...")
@@ -116,18 +286,30 @@ def check_and_send_tiltmeter_alerts():
                 print(f"No instrument_id mapping for node {node_id}")
                 continue
             
-            # 1. First check reference_values table for this instrument
-            reference_resp = supabase.table('reference_values').select('*').eq('instrument_id', instrument_id).execute()
-            reference_values = reference_resp.data[0] if reference_resp.data else None
+            # 1. First try to get time-based reference values for current datetime
+            time_based_reference_values = get_time_based_reference_values(instrument_id)
             
-            # 2. Get instrument settings for this node's instrument_id
+            # 2. If no time-based reference found, fall back to global reference_values table
+            if time_based_reference_values:
+                reference_values = time_based_reference_values
+                print(f"Using time-based reference values for {instrument_id}")
+            else:
+                # Fall back to original reference_values table
+                reference_resp = supabase.table('reference_values').select('*').eq('instrument_id', instrument_id).execute()
+                reference_values = reference_resp.data[0] if reference_resp.data else None
+                if reference_values:
+                    print(f"Using global reference values for {instrument_id}")
+                else:
+                    print(f"No reference values found for {instrument_id}")
+            
+            # 3. Get instrument settings for this node's instrument_id
             instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
             instrument = instrument_resp.data[0] if instrument_resp.data else None
             if not instrument:
                 print(f"No instrument found for {instrument_id}")
                 continue
 
-            # 3. Determine which threshold values to use
+            # 4. Determine which threshold values to use
             if reference_values and reference_values.get('enabled', False):
                 # Use reference values when enabled
                 print(f"Using reference values for {instrument_id}")
@@ -207,16 +389,19 @@ def check_and_send_tiltmeter_alerts():
                 
                 # Calculate calibrated values when reference values are enabled
                 if reference_values and reference_values.get('enabled', False):
-                    ref_x = reference_values.get('reference_x_value') or 0
-                    ref_y = reference_values.get('reference_y_value') or 0
-                    ref_z = reference_values.get('reference_z_value') or 0
+                    ref_x = reference_values.get('x_reference_value') or 0
+                    ref_y = reference_values.get('y_reference_value') or 0
+                    ref_z = reference_values.get('z_reference_value') or 0
                     
                     # Calculate calibrated values (raw - reference) to match frontend logic
                     calibrated_x = x - ref_x if x is not None else None
                     calibrated_y = y - ref_y if y is not None else None
                     calibrated_z = z - ref_z if z is not None else None
                     
-                    print(f"Reference values enabled for {instrument_id}: X={ref_x}, Y={ref_y}, Z={ref_z}")
+                    ref_type = "time-based" if reference_values.get('time_based', False) else "global"
+                    print(f"Reference values enabled for {instrument_id} ({ref_type}): X={ref_x}, Y={ref_y}, Z={ref_z}")
+                    if reference_values.get('time_based', False):
+                        print(f"Time-based period: {reference_values.get('from_date')} to {reference_values.get('to_date')}")
                     print(f"Raw values: X={x}, Y={y}, Z={z}")
                     print(f"Calibrated values: X={calibrated_x}, Y={calibrated_y}, Z={calibrated_z}")
                     
