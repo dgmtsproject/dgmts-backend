@@ -339,7 +339,6 @@ def test_tiltmeter_alerts_with_time_based_refs():
             test_emails = []
         
         print("🧪 Testing Tiltmeter Alerts with Time-Based References")
-        print("=" * 60)
         
         if test_emails:
             print(f"📧 Test emails provided: {', '.join(test_emails)}")
@@ -350,9 +349,7 @@ def test_tiltmeter_alerts_with_time_based_refs():
         from services.alert_service import test_time_based_reference_system
         test_time_based_reference_system()
         
-        print("\n" + "=" * 60)
-        print("🚨 Now triggering actual tiltmeter alerts...")
-        print("=" * 60)
+        print("🚨 Checking for threshold violations...")
         
         # Then trigger the actual alert system
         check_and_send_tiltmeter_alerts()
