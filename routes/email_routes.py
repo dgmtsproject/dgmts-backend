@@ -310,19 +310,20 @@ def test_tiltmeter_alert():
     except Exception as e:
         return jsonify({"error": f"Failed to send tiltmeter alert: {str(e)}"}), 500
 
-@email_bp.route('/trigger-tiltmeter-alerts', methods=['POST'])
-def trigger_tiltmeter_alerts():
-    """Manually trigger the actual tiltmeter alert system"""
-    try:
-        print("Manually triggering tiltmeter alert system...")
-        check_and_send_tiltmeter_alerts()
-        return jsonify({
-            "message": "Tiltmeter alert system triggered successfully",
-            "status": "success"
-        })
-    except Exception as e:
-        print(f"Error triggering tiltmeter alerts: {e}")
-        return jsonify({"error": f"Failed to trigger tiltmeter alerts: {str(e)}"}), 500
+# TEMPORARILY DISABLED - Tiltmeter alerts are disabled
+# @email_bp.route('/trigger-tiltmeter-alerts', methods=['POST'])
+# def trigger_tiltmeter_alerts():
+#     """Manually trigger the actual tiltmeter alert system"""
+#     try:
+#         print("Manually triggering tiltmeter alert system...")
+#         check_and_send_tiltmeter_alerts()
+#         return jsonify({
+#             "message": "Tiltmeter alert system triggered successfully",
+#             "status": "success"
+#         })
+#     except Exception as e:
+#         print(f"Error triggering tiltmeter alerts: {e}")
+#         return jsonify({"error": f"Failed to trigger tiltmeter alerts: {str(e)}"}), 500
 
 @email_bp.route('/test-seismograph-alert', methods=['POST'])
 def test_seismograph_alert():

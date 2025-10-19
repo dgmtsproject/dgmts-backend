@@ -80,10 +80,11 @@ def store_sensor_data(data, node_id):
         print(f"Successfully stored {stored_count} records for node {node_id}")
         
         # Trigger tiltmeter alert check if new data was inserted
-        if new_data_inserted and node_id in Config.SENSOR_NODES:
-            print(f"New tiltmeter data inserted for node {node_id}, triggering alert check...")
-            from services.alert_service import check_and_send_tiltmeter_alerts
-            check_and_send_tiltmeter_alerts()
+        # TEMPORARILY DISABLED - Tiltmeter alerts are disabled
+        # if new_data_inserted and node_id in Config.SENSOR_NODES:
+        #     print(f"New tiltmeter data inserted for node {node_id}, triggering alert check...")
+        #     from services.alert_service import check_and_send_tiltmeter_alerts
+        #     check_and_send_tiltmeter_alerts()
         
         return True
     except Exception as e:

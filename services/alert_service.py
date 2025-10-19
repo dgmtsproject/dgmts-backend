@@ -1,3 +1,28 @@
+"""
+Alert Service for DGMS Backend
+
+IMPORTANT: TILTMETER ALERTS ARE TEMPORARILY DISABLED
+====================================================
+
+To temporarily disable tiltmeter alerts, the following changes were made:
+
+1. In services/sensor_service.py (lines 82-87):
+   - Commented out the automatic tiltmeter alert trigger when new data is inserted
+   - This prevents alerts from being sent when new tiltmeter readings are stored
+
+2. In routes/email_routes.py (lines 313-326):
+   - Commented out the manual trigger endpoint '/trigger-tiltmeter-alerts'
+   - This prevents manual triggering of tiltmeter alerts via API
+
+TO RE-ENABLE TILTMETER ALERTS:
+==============================
+1. Uncomment lines 84-87 in services/sensor_service.py
+2. Uncomment lines 314-326 in routes/email_routes.py
+3. Remove this comment block
+
+The check_and_send_tiltmeter_alerts() function itself remains intact and functional.
+"""
+
 import os
 import requests
 from datetime import datetime, timedelta, timezone
