@@ -355,25 +355,28 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']
         
+        # Determine the highest alert level for styling
+        alert_class = "alert-item"
+        has_shutdown = any("Shutdown" in msg for msg in alert_data['messages'])
+        has_warning = any("Warning" in msg for msg in alert_data['messages'])
+        has_alert = any("Alert" in msg for msg in alert_data['messages'])
+        
+        if has_shutdown:
+            alert_class += " shutdown"
+        elif has_warning:
+            alert_class += " warning"
+        elif has_alert:
+            alert_class += " alert"
+        
+        # Consolidate all messages into a single alert display
+        consolidated_messages = "<br>".join(alert_data['messages'])
+        
         body += f"""
                 <div class="alert-section">
-                    <h3>📊 Real-time Alert - {seismograph_name} ({instrument_id})</h3>
-        """
-        
-        for message in alert_data['messages']:
-            # Determine alert type for styling
-            alert_class = "alert-item"
-            if "Shutdown" in message:
-                alert_class += " shutdown"
-            elif "Warning" in message:
-                alert_class += " warning"
-            elif "Alert" in message:
-                alert_class += " alert"
-            
-            body += f"""
+                    <h3>📊 Rock Seismograph Alert - {seismograph_name} ({instrument_id})</h3>
                     <div class="{alert_class}">
                         <div class="timestamp">{formatted_time}</div>
-                        <div class="alert-message">{message}</div>
+                        <div class="alert-message">{consolidated_messages}</div>
                         <div class="max-values">
                             <table>
                                 <thead>
@@ -399,9 +402,6 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
                             </table>
                         </div>
                     </div>
-            """
-        
-        body += """
                 </div>
         """
     
