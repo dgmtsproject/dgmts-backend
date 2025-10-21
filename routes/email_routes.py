@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from services.email_service import send_email
 from services.alert_service import check_and_send_tiltmeter_alerts, check_and_send_seismograph_alert, check_and_send_smg3_seismograph_alert
+from services.connection_monitor_service import check_and_send_connection_lost_alerts
 from supabase import create_client, Client
 from config import Config
 from datetime import datetime, timezone
@@ -614,12 +615,12 @@ def test_tiltmeter_alert_simple():
 
 @email_bp.route('/test-seismograph-alert', methods=['POST'])
 def test_seismograph_alert():
-    """Test endpoint to send a sample seismograph alert email"""
+    """Test endpoint to send a sample seismograph alert email calling the actual alert service from services/alert_service.py"""
     try:
         # Get email addresses from request body
         data = request.get_json() or {}
         test_emails = data.get('emails', ['mahmerraza19@gmail.com'])
-        seismograph_type = data.get('type', 'SMG1')  # SMG1 or SMG-3
+        seismograph_type = data.get('type', 'SMG-1')  # Default to SMG-1
         
         # Ensure test_emails is a list
         if isinstance(test_emails, str):
@@ -627,154 +628,32 @@ def test_seismograph_alert():
         elif not isinstance(test_emails, list):
             test_emails = ['mahmerraza19@gmail.com']
         
-        # Get instrument settings
+        # Get instrument settings to verify it exists
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', seismograph_type).execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
             return jsonify({"error": f"No instrument found for {seismograph_type}"}), 404
         
-        # Create test alert data
-        test_alerts = {
-            'test_hour': {
-                'messages': [
-                    "<b>Test Alert threshold reached on X-axis:</b> 0.001234",
-                    "<b>Test Warning threshold reached on Y-axis:</b> 0.002345",
-                    "<b>Test Shutdown threshold reached on Z-axis:</b> 0.003456"
-                ],
-                'timestamp': datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d %I:%M %p EST'),
-                'max_values': {'X': 0.001234, 'Y': 0.002345, 'Z': 0.003456}
-            }
-        }
-        
-        # Create email body
-        seismograph_name = "ANC DAR-BC Seismograph" if seismograph_type == "SMG-3" else "Seismograph"
-        body = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }}
-                .container {{ max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }}
-                .header {{ background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }}
-                .header h1 {{ margin: 0; font-size: 24px; font-weight: bold; }}
-                .header p {{ margin: 5px 0 0 0; opacity: 0.9; }}
-                .content {{ padding: 30px; }}
-                .alert-section {{ margin-bottom: 25px; }}
-                .alert-section h3 {{ color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }}
-                .alert-item {{ background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }}
-                .alert-item.warning {{ border-left-color: #ffc107; }}
-                .alert-item.alert {{ border-left-color: #fd7e14; }}
-                .alert-item.shutdown {{ border-left-color: #dc3545; }}
-                .timestamp {{ font-weight: bold; color: #495057; margin-bottom: 10px; }}
-                .alert-message {{ color: #212529; line-height: 1.5; }}
-                .max-values {{ background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }}
-                .max-values table {{ width: 100%; border-collapse: collapse; }}
-                .max-values th, .max-values td {{ padding: 8px; text-align: center; border: 1px solid #dee2e6; }}
-                .max-values th {{ background-color: #f8f9fa; font-weight: bold; }}
-                .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }}
-                .footer p {{ margin: 0; }}
-                .company-info {{ font-weight: bold; color: #0056d2; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🌊 {seismograph_name.upper()} ALERT NOTIFICATION</h1>
-                    <p>Dulles Geotechnical Monitoring System</p>
-                </div>
-                
-                <div class="content">
-                    <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
-                        This is a <strong>TEST</strong> alert notification from the DGMTS monitoring system. 
-                        The following {seismograph_name} ({seismograph_type}) thresholds have been exceeded:
-                    </p>
-        """
-        
-        # Add alerts for each hour
-        for hour_key, alert_data in test_alerts.items():
-            body += f"""
-                    <div class="alert-section">
-                        <h3>📊 Hour: {hour_key.replace('_', ' ').title()} - {seismograph_name} Alerts</h3>
-            """
-            
-            for message in alert_data['messages']:
-                # Determine alert type for styling
-                alert_class = "alert-item"
-                if "Shutdown" in message:
-                    alert_class += " shutdown"
-                elif "Warning" in message:
-                    alert_class += " warning"
-                elif "Alert" in message:
-                    alert_class += " alert"
-                
-                body += f"""
-                        <div class="{alert_class}">
-                            <div class="timestamp">{alert_data['timestamp']}</div>
-                            <div class="alert-message">{message}</div>
-                            <div class="max-values">
-                                <table>
-                                    <thead>
-                                        <tr>
-                                            <th>Axis</th>
-                                            <th>Max Value (in/s)</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <tr>
-                                            <td>X (Longitudinal)</td>
-                                            <td>{alert_data['max_values']['X']:.6f}</td>
-                                        </tr>
-                                        <tr>
-                                            <td>Y (Vertical)</td>
-                                            <td>{alert_data['max_values']['Y']:.6f}</td>
-                                        </tr>
-                                        <tr>
-                                            <td>Z (Transverse)</td>
-                                            <td>{alert_data['max_values']['Z']:.6f}</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                """
-            
-            body += """
-                    </div>
-            """
-        
-        body += f"""
-                    <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
-                        <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
-                        <p style="margin: 5px 0 0 0; color: #495057;">
-                            Please review the {seismograph_name} data and take appropriate action if necessary. 
-                            This is a test email to verify the alert system is working correctly.
-                        </p>
-                    </div>
-                </div>
-                
-                <div class="footer">
-                    <p><span class="company-info">Dulles Geotechnical</span> | Instrumentation Monitoring System</p>
-                    <p style="font-size: 12px; margin-top: 5px;">
-                        This is a test message. Please do not reply to this email.
-                    </p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        current_time = datetime.now(timezone.utc)
-        current_time_est = current_time.astimezone(pytz.timezone('US/Eastern'))
-        formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
-        subject = f"🌊 {seismograph_name} Test Alert Notification - {formatted_time}"
-        
-        if send_email(test_emails, subject, body):
-            return jsonify({"message": f"Test {seismograph_name} alert email sent successfully"})
+        # Call the actual alert service with custom emails
+        if seismograph_type == 'SMG-1':
+            check_and_send_seismograph_alert(custom_emails=test_emails)
+        elif seismograph_type == 'SMG-3':
+            # Note: SMG-3 function doesn't have custom_emails parameter yet
+            check_and_send_smg3_seismograph_alert()
         else:
-            return jsonify({"error": f"Failed to send test {seismograph_name} alert email"}), 500
-            
+            return jsonify({"error": f"Unsupported seismograph type: {seismograph_type}"}), 400
+        
+        return jsonify({
+            "message": f"Test seismograph alert sent successfully for {seismograph_type}",
+            "emails_sent_to": test_emails,
+            "instrument_id": seismograph_type
+        }), 200
+        
     except Exception as e:
         print(f"Error in test_seismograph_alert: {e}")
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to send test seismograph alert: {str(e)}"}), 500
 
 @email_bp.route('/test-rock-seismograph-alert', methods=['POST'])
 def test_rock_seismograph_alert():
@@ -954,3 +833,21 @@ def test_rock_seismograph_alert():
     except Exception as e:
         print(f"Error in test_rock_seismograph_alert: {e}")
         return jsonify({"error": str(e)}), 500
+
+@email_bp.route('/check-connection-lost', methods=['POST'])
+def check_connection_lost():
+    """Manual trigger to check for connection lost errors and send notifications"""
+    try:
+        # Call the connection monitor service
+        check_and_send_connection_lost_alerts()
+        
+        return jsonify({
+            "message": "Connection lost check completed successfully",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in check_connection_lost: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to check connection lost alerts: {str(e)}"}), 500

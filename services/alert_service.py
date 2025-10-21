@@ -613,16 +613,20 @@ def _create_tiltmeter_email_body(node_alerts, node_ids, project_name, instrument
     
     return body
 
-def check_and_send_seismograph_alert():
-    """Check seismograph alerts and send emails if thresholds are exceeded"""
+def check_and_send_seismograph_alert(custom_emails=None):
+    """Check seismograph alerts and send emails if thresholds are exceeded
+    
+    Args:
+        custom_emails (list, optional): Custom email addresses to use instead of instrument emails
+    """
     print("Checking seismograph alerts using background API...")
     try:
         # 1. Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG-1').execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
-            print("No instrument found for SMG1")
-            log_alert_event("ERROR", f"In check_and_send_seismograph_alert: No instrument found for SMG1", 'SMG1')
+            print("No instrument found for SMG-1")
+            log_alert_event("ERROR", f"In check_and_send_seismograph_alert: No instrument found for SMG-1", 'SMG-1')
             return
 
         # For seismograph, use ONLY single values (not a tiltmeter)
@@ -633,6 +637,13 @@ def check_and_send_seismograph_alert():
         alert_emails = instrument.get('alert_emails') or []
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
+        
+        # Use custom emails if provided, otherwise use instrument emails
+        if custom_emails:
+            alert_emails = custom_emails
+            warning_emails = custom_emails
+            shutdown_emails = custom_emails
+            print(f"Using custom emails for test: {custom_emails}")
 
         # 2. Calculate time range for the last minute using UTC and convert to EST properly
         # Account for instrument clock being 1 hour behind EST
@@ -663,12 +674,12 @@ def check_and_send_seismograph_alert():
         response = requests.get(url, headers=headers)
         if response.status_code not in [200, 204]:
             print(f"Failed to fetch background data: {response.status_code} {response.text}")
-            log_alert_event("ERROR", f"Failed to fetch background data: {response.status_code} {response.text}", 'SMG1')
+            log_alert_event("ERROR", f"Failed to fetch background data: {response.status_code} {response.text}", 'SMG-1')
             return
         
         # Handle 204 No Content response
         if response.status_code == 204:
-            print("No data available for SMG1 in the last minute (204 No Content)")
+            print("No data available for SMG-1 in the last minute (204 No Content)")
             return
 
         data = response.json()
@@ -689,7 +700,7 @@ def check_and_send_seismograph_alert():
             # Check if we've already sent for this timestamp
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
-                .eq('instrument_id', 'SMG1') \
+                .eq('instrument_id', 'SMG-1') \
                 .eq('node_id', 15092) \
                 .eq('timestamp', timestamp) \
                 .execute()
@@ -729,7 +740,7 @@ def check_and_send_seismograph_alert():
             
             try:
                 # Check both SMG1 and SMG-1 instruments
-                for smg_id in ['SMG1', 'SMG-1']:
+                for smg_id in ['SMG-1']:
                     instrument_info = get_project_info(smg_id)
                     if instrument_info and instrument_info['project_name']:
                         instrument_details.append(instrument_info)
@@ -743,7 +754,7 @@ def check_and_send_seismograph_alert():
             if project_names:
                 project_name = " & ".join(project_names)
             else:
-                project_name = "ANC DAR BC and DGMTS Testing"  # Default fallback
+                project_name = "ANC DAR BC"  # Default fallback
                 
             body = _create_seismograph_email_body(alerts_by_timestamp, "Seismograph", project_name, instrument_details)
             
@@ -760,17 +771,18 @@ def check_and_send_seismograph_alert():
                 # Record that we've sent for each timestamp
                 for timestamp, alert_data in alerts_by_timestamp.items():
                     supabase.table('sent_alerts').insert({
-                        'instrument_id': 'SMG1',
+                        'instrument_id': 'SMG-1',
                         'node_id': 15092,
                         'timestamp': alert_data['timestamp'],
                         'alert_type': 'any'
                     }).execute()
             else:
-                print("No alert/warning/shutdown emails configured for SMG1")
+                print("No alert/warning/shutdown emails configured for SMG-1")
         else:
             print("No thresholds crossed for any reading in the last minute.")
     except Exception as e:
         print(f"Error in check_and_send_seismograph_alert: {e}")
+        log_alert_event("ERROR", f"Error in check_and_send_seismograph_alert: {e}", 'SMG-1')
 
 def check_and_send_smg3_seismograph_alert():
     """Check SMG-3 seismograph alerts and send emails if thresholds are exceeded"""
