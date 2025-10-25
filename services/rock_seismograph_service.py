@@ -9,6 +9,20 @@ from .email_service import send_email
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
+def _determine_alert_type(messages, shutdown_value, warning_value, alert_value):
+    """Determine the highest priority alert type based on messages"""
+    # Check for shutdown threshold messages first (highest priority)
+    if any("Shutdown threshold reached" in msg for msg in messages):
+        return "shutdown"
+    # Check for warning threshold messages (medium priority)
+    elif any("Warning threshold reached" in msg for msg in messages):
+        return "warning"
+    # Check for alert threshold messages (lowest priority)
+    elif any("Alert threshold reached" in msg for msg in messages):
+        return "alert"
+    # Fallback to 'any' if we can't determine
+    return "any"
+
 def log_alert_event(log_type, log_text, instrument_id, log_reference_alert=None):
     """Log alert events to sent_alert_logs table"""
     try:
@@ -240,11 +254,14 @@ def check_and_send_rock_seismograph_alert(instrument_id):
                     print(f"Alert email sent successfully for {instrument_id} to {len(all_emails)} recipients")
                     # Record that we've sent for each timestamp
                     for timestamp, alert_data in alerts_by_timestamp.items():
+                        # Determine the highest priority alert type
+                        alert_type = _determine_alert_type(alert_data['messages'], shutdown_value, warning_value, alert_value)
+                        
                         sent_alert_resp = supabase.table('sent_alerts').insert({
                             'instrument_id': instrument_id,
                             'node_id': device_id,  # Use device_id instead of project_id
                             'timestamp': alert_data['timestamp'],
-                            'alert_type': 'any'
+                            'alert_type': alert_type
                         }).execute()
                         if sent_alert_resp.data:
                             alert_id = sent_alert_resp.data[0]['id']

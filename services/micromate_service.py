@@ -9,6 +9,20 @@ from .email_service import send_email
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
+def _determine_alert_type(messages):
+    """Determine the highest priority alert type based on messages"""
+    # Check for shutdown threshold messages first (highest priority)
+    if any("Shutdown threshold reached" in msg for msg in messages):
+        return "shutdown"
+    # Check for warning threshold messages (medium priority)
+    elif any("Warning threshold reached" in msg for msg in messages):
+        return "warning"
+    # Check for alert threshold messages (lowest priority)
+    elif any("Alert threshold reached" in msg for msg in messages):
+        return "alert"
+    # Fallback to 'any' if we can't determine
+    return "any"
+
 def log_alert_event(log_type, log_text, instrument_id, log_reference_alert=None):
     """Log alert events to sent_alert_logs table"""
     try:
@@ -230,11 +244,14 @@ def check_and_send_micromate_alert():
                     
                     # Record that we've sent for each timestamp
                     for timestamp, alert_data in alerts_by_timestamp.items():
+                        # Determine the highest priority alert type
+                        alert_type = _determine_alert_type(alert_data['messages'])
+                        
                         supabase.table('sent_alerts').insert({
                             'instrument_id': 'Instantel 1',
                             'node_id': 24252,
                             'timestamp': alert_data['timestamp'],
-                            'alert_type': 'any'
+                            'alert_type': alert_type
                         }).execute()
                 else:
                     log_alert_event("SEND EMAIL_FAILED", f"Failed to send alert email for Instantel 1", 'Instantel 1')
