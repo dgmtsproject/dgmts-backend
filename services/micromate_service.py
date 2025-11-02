@@ -512,23 +512,6 @@ def get_um16368_readings():
                 # Row 69 (index 68): Time and units
                 units_row = rows[68]  # 0-indexed, so row 69 is index 68
                 
-                # Find column indices for Tran, Vert, Long, Geophone
-                tran_index = None
-                vert_index = None
-                long_index = None
-                geophone_index = None
-                
-                for i, col_name in enumerate(column_row):
-                    col_name_upper = col_name.strip().upper() if col_name else ""
-                    if col_name_upper == "TRAN":
-                        tran_index = i
-                    elif col_name_upper == "VERT":
-                        vert_index = i
-                    elif col_name_upper == "LONG":
-                        long_index = i
-                    elif col_name_upper == "GEOPHONE":
-                        geophone_index = i
-                
                 # Find Time column index (first column usually, or search for it)
                 time_index = 0  # Default to first column
                 for i, col_name in enumerate(column_row):
@@ -537,11 +520,37 @@ def get_um16368_readings():
                         time_index = i
                         break
                 
-                # Extract format values
-                tran_format = format_row[tran_index].strip() if tran_index is not None and tran_index < len(format_row) else "PPV"
-                vert_format = format_row[vert_index].strip() if vert_index is not None and vert_index < len(format_row) else "PPV"
-                long_format = format_row[long_index].strip() if long_index is not None and long_index < len(format_row) else "PPV"
-                geophone_format = format_row[geophone_index].strip() if geophone_index is not None and geophone_index < len(format_row) else "PVS"
+                # Find column indices by matching pattern across all three rows
+                # For Tran: Row 67 = "Tran", Row 68 = "PPV", Row 69 = "in/s"
+                # For Vert: Row 67 = "Vert", Row 68 = "PPV", Row 69 = "in/s"
+                # For Long: Row 67 = "Long", Row 68 = "PPV", Row 69 = "in/s"
+                # For Geophone: Row 67 = "Geophone", Row 68 = "PVS" (keep as is)
+                tran_index = None
+                vert_index = None
+                long_index = None
+                geophone_index = None
+                
+                # Find the maximum column count across all three rows
+                max_cols = max(len(column_row), len(format_row), len(units_row))
+                
+                for i in range(max_cols):
+                    # Get values from each row (safe access)
+                    col_name = column_row[i].strip().upper() if i < len(column_row) and column_row[i] else ""
+                    format_val = format_row[i].strip().upper() if i < len(format_row) and format_row[i] else ""
+                    unit_val = units_row[i].strip().lower() if i < len(units_row) and units_row[i] else ""
+                    
+                    # Match Tran: column name "TRAN", format "PPV", unit "in/s"
+                    if col_name == "TRAN" and format_val == "PPV" and "in/s" in unit_val:
+                        tran_index = i
+                    # Match Vert: column name "VERT", format "PPV", unit "in/s"
+                    elif col_name == "VERT" and format_val == "PPV" and "in/s" in unit_val:
+                        vert_index = i
+                    # Match Long: column name "LONG", format "PPV", unit "in/s"
+                    elif col_name == "LONG" and format_val == "PPV" and "in/s" in unit_val:
+                        long_index = i
+                    # Match Geophone: column name "GEOPHONE" (format can be PVS, keep as is)
+                    elif col_name == "GEOPHONE":
+                        geophone_index = i
                 
                 # Process readings from row 70 onwards (index 69+)
                 file_readings = []
@@ -564,37 +573,39 @@ def get_um16368_readings():
                         'readings': {}
                     }
                     
-                    # Add Tran reading if available
+                    # Add Tran reading if available (only if pattern matched)
                     if tran_index is not None and tran_index < len(row):
                         tran_value = row[tran_index].strip()
                         if tran_value:
                             try:
-                                reading['readings'][f'Tran_{tran_format}'] = float(tran_value)
+                                reading['readings']['Tran_PPV'] = float(tran_value)
                             except ValueError:
-                                reading['readings'][f'Tran_{tran_format}'] = tran_value
+                                reading['readings']['Tran_PPV'] = tran_value
                     
-                    # Add Vert reading if available
+                    # Add Vert reading if available (only if pattern matched)
                     if vert_index is not None and vert_index < len(row):
                         vert_value = row[vert_index].strip()
                         if vert_value:
                             try:
-                                reading['readings'][f'Vert_{vert_format}'] = float(vert_value)
+                                reading['readings']['Vert_PPV'] = float(vert_value)
                             except ValueError:
-                                reading['readings'][f'Vert_{vert_format}'] = vert_value
+                                reading['readings']['Vert_PPV'] = vert_value
                     
-                    # Add Long reading if available
+                    # Add Long reading if available (only if pattern matched)
                     if long_index is not None and long_index < len(row):
                         long_value = row[long_index].strip()
                         if long_value:
                             try:
-                                reading['readings'][f'Long_{long_format}'] = float(long_value)
+                                reading['readings']['Long_PPV'] = float(long_value)
                             except ValueError:
-                                reading['readings'][f'Long_{long_format}'] = long_value
+                                reading['readings']['Long_PPV'] = long_value
                     
-                    # Add Geophone reading if available
+                    # Add Geophone reading if available (keep format as found)
                     if geophone_index is not None and geophone_index < len(row):
                         geophone_value = row[geophone_index].strip()
                         if geophone_value:
+                            # Get the format from row 68 for Geophone
+                            geophone_format = format_row[geophone_index].strip() if geophone_index < len(format_row) else "PVS"
                             try:
                                 reading['readings'][f'Geophone_{geophone_format}'] = float(geophone_value)
                             except ValueError:
