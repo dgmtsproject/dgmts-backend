@@ -566,11 +566,10 @@ def get_um16368_readings():
                     if not time_value:
                         continue
                     
-                    # Build reading object with key-value pairs
+                    # Build reading object with all values at the same level
                     reading = {
                         'Time': time_value,
-                        'source_file': os.path.basename(file_path),
-                        'readings': {}
+                        'source_file': os.path.basename(file_path)
                     }
                     
                     # Add Tran reading if available (only if pattern matched)
@@ -578,27 +577,27 @@ def get_um16368_readings():
                         tran_value = row[tran_index].strip()
                         if tran_value:
                             try:
-                                reading['readings']['Transverse_PPV'] = float(tran_value)
+                                reading['Transverse_PPV'] = float(tran_value)
                             except ValueError:
-                                reading['readings']['Transverse_PPV'] = tran_value
+                                reading['Transverse_PPV'] = tran_value
                     
                     # Add Vert reading if available (only if pattern matched)
                     if vert_index is not None and vert_index < len(row):
                         vert_value = row[vert_index].strip()
                         if vert_value:
                             try:
-                                reading['readings']['Vertical_PPV'] = float(vert_value)
+                                reading['Vertical_PPV'] = float(vert_value)
                             except ValueError:
-                                reading['readings']['Vertical_PPV'] = vert_value
+                                reading['Vertical_PPV'] = vert_value
                     
                     # Add Long reading if available (only if pattern matched)
                     if long_index is not None and long_index < len(row):
                         long_value = row[long_index].strip()
                         if long_value:
                             try:
-                                reading['readings']['Longitudinal_PPV'] = float(long_value)
+                                reading['Longitudinal_PPV'] = float(long_value)
                             except ValueError:
-                                reading['readings']['Longitudinal_PPV'] = long_value
+                                reading['Longitudinal_PPV'] = long_value
                     
                     # Add Geophone reading if available (keep format as found)
                     if geophone_index is not None and geophone_index < len(row):
@@ -607,12 +606,12 @@ def get_um16368_readings():
                             # Get the format from row 68 for Geophone
                             geophone_format = format_row[geophone_index].strip() if geophone_index < len(format_row) else "PVS"
                             try:
-                                reading['readings'][f'Geophone_{geophone_format}'] = float(geophone_value)
+                                reading[f'Geophone_{geophone_format}'] = float(geophone_value)
                             except ValueError:
-                                reading['readings'][f'Geophone_{geophone_format}'] = geophone_value
+                                reading[f'Geophone_{geophone_format}'] = geophone_value
                     
-                    # Only add reading if it has at least one value
-                    if reading['readings']:
+                    # Only add reading if it has at least one reading value (excluding Time and source_file)
+                    if len(reading) > 2:  # More than just Time and source_file
                         file_readings.append(reading)
                 
                 all_readings.extend(file_readings)
