@@ -1,5 +1,7 @@
 import os
 import requests
+import csv
+import glob
 from datetime import datetime, timedelta, timezone
 import pytz
 from supabase import create_client, Client
@@ -437,3 +439,201 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
     """
     
     return body
+
+def get_um16368_readings():
+    """
+    Parse CSV files from /root/root/ftp-server/Dulles Test/UM16368/CSV directory
+    and extract readings according to the specified structure:
+    - Row 67 (index 66): Column names (Tran, Vert, Long, Geophone)
+    - Row 68 (index 67): Reading formats (Tran: PPV, Vert: PPV, Long: PPV, Geophone: PVS)
+    - Row 69 (index 68): Time column and units
+    - Row 70+ (index 69+): Actual readings
+    
+    Returns a list of readings with key-value pairs for each timestamp.
+    """
+    csv_directory = "/root/root/ftp-server/Dulles Test/UM16368/CSV"
+    
+    if not os.path.exists(csv_directory):
+        print(f"CSV directory not found: {csv_directory}")
+        return {
+            'readings': [],
+            'summary': {
+                'total_readings': 0,
+                'files_processed': 0,
+                'files_found': 0,
+                'errors_count': 1
+            },
+            'processed_files': [],
+            'errors': [f'CSV directory not found: {csv_directory}']
+        }
+    
+    # Find all CSV files in the directory
+    pattern = os.path.join(csv_directory, "*.csv")
+    csv_files = glob.glob(pattern)
+    
+    if not csv_files:
+        print(f"No CSV files found in directory: {csv_directory}")
+        return {
+            'readings': [],
+            'summary': {
+                'total_readings': 0,
+                'files_processed': 0,
+                'files_found': 0,
+                'errors_count': 1
+            },
+            'processed_files': [],
+            'errors': [f'No CSV files found in directory: {csv_directory}']
+        }
+    
+    # Sort files by name
+    csv_files.sort()
+    
+    all_readings = []
+    processed_files = []
+    errors = []
+    
+    for file_path in csv_files:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                reader = csv.reader(file)
+                rows = list(reader)
+                
+                # Check if file has enough rows (at least 70 rows needed)
+                if len(rows) < 70:
+                    errors.append(f'File {os.path.basename(file_path)} has less than 70 rows')
+                    continue
+                
+                # Row 67 (index 66): Column names
+                column_row = rows[66]  # 0-indexed, so row 67 is index 66
+                
+                # Row 68 (index 67): Reading formats
+                format_row = rows[67]  # 0-indexed, so row 68 is index 67
+                
+                # Row 69 (index 68): Time and units
+                units_row = rows[68]  # 0-indexed, so row 69 is index 68
+                
+                # Find column indices for Tran, Vert, Long, Geophone
+                tran_index = None
+                vert_index = None
+                long_index = None
+                geophone_index = None
+                
+                for i, col_name in enumerate(column_row):
+                    col_name_upper = col_name.strip().upper() if col_name else ""
+                    if col_name_upper == "TRAN":
+                        tran_index = i
+                    elif col_name_upper == "VERT":
+                        vert_index = i
+                    elif col_name_upper == "LONG":
+                        long_index = i
+                    elif col_name_upper == "GEOPHONE":
+                        geophone_index = i
+                
+                # Find Time column index (first column usually, or search for it)
+                time_index = 0  # Default to first column
+                for i, col_name in enumerate(column_row):
+                    col_name_upper = col_name.strip().upper() if col_name else ""
+                    if col_name_upper == "TIME":
+                        time_index = i
+                        break
+                
+                # Extract format values
+                tran_format = format_row[tran_index].strip() if tran_index is not None and tran_index < len(format_row) else "PPV"
+                vert_format = format_row[vert_index].strip() if vert_index is not None and vert_index < len(format_row) else "PPV"
+                long_format = format_row[long_index].strip() if long_index is not None and long_index < len(format_row) else "PPV"
+                geophone_format = format_row[geophone_index].strip() if geophone_index is not None and geophone_index < len(format_row) else "PVS"
+                
+                # Process readings from row 70 onwards (index 69+)
+                file_readings = []
+                for row_idx in range(69, len(rows)):
+                    row = rows[row_idx]
+                    
+                    # Skip empty rows
+                    if not row or (len(row) == 1 and not row[0].strip()):
+                        continue
+                    
+                    # Extract time
+                    time_value = row[time_index].strip() if time_index < len(row) else ""
+                    if not time_value:
+                        continue
+                    
+                    # Build reading object with key-value pairs
+                    reading = {
+                        'Time': time_value,
+                        'source_file': os.path.basename(file_path),
+                        'readings': {}
+                    }
+                    
+                    # Add Tran reading if available
+                    if tran_index is not None and tran_index < len(row):
+                        tran_value = row[tran_index].strip()
+                        if tran_value:
+                            try:
+                                reading['readings'][f'Tran_{tran_format}'] = float(tran_value)
+                            except ValueError:
+                                reading['readings'][f'Tran_{tran_format}'] = tran_value
+                    
+                    # Add Vert reading if available
+                    if vert_index is not None and vert_index < len(row):
+                        vert_value = row[vert_index].strip()
+                        if vert_value:
+                            try:
+                                reading['readings'][f'Vert_{vert_format}'] = float(vert_value)
+                            except ValueError:
+                                reading['readings'][f'Vert_{vert_format}'] = vert_value
+                    
+                    # Add Long reading if available
+                    if long_index is not None and long_index < len(row):
+                        long_value = row[long_index].strip()
+                        if long_value:
+                            try:
+                                reading['readings'][f'Long_{long_format}'] = float(long_value)
+                            except ValueError:
+                                reading['readings'][f'Long_{long_format}'] = long_value
+                    
+                    # Add Geophone reading if available
+                    if geophone_index is not None and geophone_index < len(row):
+                        geophone_value = row[geophone_index].strip()
+                        if geophone_value:
+                            try:
+                                reading['readings'][f'Geophone_{geophone_format}'] = float(geophone_value)
+                            except ValueError:
+                                reading['readings'][f'Geophone_{geophone_format}'] = geophone_value
+                    
+                    # Only add reading if it has at least one value
+                    if reading['readings']:
+                        file_readings.append(reading)
+                
+                all_readings.extend(file_readings)
+                processed_files.append({
+                    'file': os.path.basename(file_path),
+                    'readings_count': len(file_readings)
+                })
+                
+        except Exception as e:
+            error_msg = f'Error processing {os.path.basename(file_path)}: {str(e)}'
+            errors.append(error_msg)
+            print(error_msg)
+            continue
+    
+    # Sort all readings by Time
+    try:
+        all_readings.sort(key=lambda x: x.get('Time', ''))
+    except Exception as e:
+        print(f"Error sorting readings: {e}")
+    
+    print(f"Processed {len(processed_files)} files, extracted {len(all_readings)} readings")
+    if errors:
+        print(f"Errors encountered: {errors}")
+    
+    return {
+        'readings': all_readings,
+        'summary': {
+            'total_readings': len(all_readings),
+            'files_processed': len(processed_files),
+            'files_found': len(csv_files),
+            'errors_count': len(errors)
+        },
+        'processed_files': processed_files,
+        'errors': errors if errors else []
+    }

@@ -3,7 +3,7 @@ import json
 import glob
 from flask import Blueprint, jsonify, current_app
 from config import Config
-from services.micromate_service import check_and_send_micromate_alert
+from services.micromate_service import check_and_send_micromate_alert, get_um16368_readings
 
 micromate_bp = Blueprint('micromate', __name__, url_prefix='/api/micromate')
 
@@ -156,4 +156,38 @@ def check_micromate_alerts():
         return jsonify({
             'error': f'Failed to check Micromate alerts: {str(e)}',
             'message': 'An error occurred while checking alerts'
+        }), 500
+
+@micromate_bp.route('/UM16368', methods=['GET'])
+def get_um16368_readings_endpoint():
+    """
+    Get all readings from CSV files in /root/root/ftp-server/Dulles Test/UM16368/CSV directory.
+    Returns readings parsed from CSV files with the following structure:
+    - Row 67: Column names (Tran, Vert, Long, Geophone)
+    - Row 68: Reading formats (Tran: PPV, Vert: PPV, Long: PPV, Geophone: PVS)
+    - Row 69: Time column and units
+    - Row 70+: Actual readings
+    
+    Each reading contains Time, source_file, and readings (key-value pairs).
+    """
+    try:
+        result = get_um16368_readings()
+        
+        if not result:
+            return jsonify({
+                'error': 'Failed to retrieve UM16368 readings',
+                'message': 'No data could be retrieved from CSV files'
+            }), 500
+        
+        return jsonify({
+            'UM16368Readings': result.get('readings', []),
+            'summary': result.get('summary', {}),
+            'processed_files': result.get('processed_files', []),
+            'errors': result.get('errors', [])
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'error': f'Internal server error: {str(e)}',
+            'message': 'An unexpected error occurred while processing the request'
         }), 500
