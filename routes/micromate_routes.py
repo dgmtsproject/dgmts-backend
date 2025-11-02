@@ -158,7 +158,7 @@ def check_micromate_alerts():
             'message': 'An error occurred while checking alerts'
         }), 500
 
-@micromate_bp.route('/UM16368', methods=['GET'])
+@micromate_bp.route('/UM16368/readings', methods=['GET'])
 def get_um16368_readings_endpoint():
     """
     Get all readings from CSV files in /root/root/ftp-server/Dulles Test/UM16368/CSV directory.
