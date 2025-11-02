@@ -578,27 +578,27 @@ def get_um16368_readings():
                         tran_value = row[tran_index].strip()
                         if tran_value:
                             try:
-                                reading['readings']['Tran_PPV'] = float(tran_value)
+                                reading['readings']['Transverse_PPV'] = float(tran_value)
                             except ValueError:
-                                reading['readings']['Tran_PPV'] = tran_value
+                                reading['readings']['Transverse_PPV'] = tran_value
                     
                     # Add Vert reading if available (only if pattern matched)
                     if vert_index is not None and vert_index < len(row):
                         vert_value = row[vert_index].strip()
                         if vert_value:
                             try:
-                                reading['readings']['Vert_PPV'] = float(vert_value)
+                                reading['readings']['Vertical_PPV'] = float(vert_value)
                             except ValueError:
-                                reading['readings']['Vert_PPV'] = vert_value
+                                reading['readings']['Vertical_PPV'] = vert_value
                     
                     # Add Long reading if available (only if pattern matched)
                     if long_index is not None and long_index < len(row):
                         long_value = row[long_index].strip()
                         if long_value:
                             try:
-                                reading['readings']['Long_PPV'] = float(long_value)
+                                reading['readings']['Longitudinal_PPV'] = float(long_value)
                             except ValueError:
-                                reading['readings']['Long_PPV'] = long_value
+                                reading['readings']['Longitudinal_PPV'] = long_value
                     
                     # Add Geophone reading if available (keep format as found)
                     if geophone_index is not None and geophone_index < len(row):
