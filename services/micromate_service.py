@@ -578,63 +578,120 @@ def get_um16368_readings():
                     col_name_val = column_row[i].strip().upper() if i < len(column_row) and column_row[i] else ""
                     
                     # Check if column name appears in column_row (2 rows before PPV)
-                    # Column names might be in the exact column or might span, so check current column
-                    # For Tran PPV: column_row should have "TRAN" and format_row should have "PPV" in same column
-                    if col_name_val == "TRAN" and format_val == "PPV" and tran_index is None:
-                        tran_index = i
-                    # Also check if "TRAN" appears in adjacent columns (in case of merged cells)
-                    elif col_name_val == "TRAN" and tran_index is None:
-                        # Check if format_row has PPV in this column or adjacent columns
-                        if format_val == "PPV":
+                    # For Tran PPV: column_row should have "TRAN" and format_row should have "PPV" in same column, and header_row should have "in/s"
+                    # We need to match: column_row[i] = "TRAN", format_row[i] = "PPV", header_row[i] = "in/s"
+                    if col_name_val == "TRAN" and format_val == "PPV":
+                        # Verify unit is "in/s" in header_row
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "in/s" in unit_val and tran_index is None:
                             tran_index = i
+                    # Also check if "TRAN" appears but format is in next column (spanning case)
+                    elif col_name_val == "TRAN" and tran_index is None:
+                        # Check if format_row has PPV in this column or next column
+                        if format_val == "PPV":
+                            unit_val = header_col.strip().lower() if header_col else ""
+                            if "in/s" in unit_val:
+                                tran_index = i
                         elif i + 1 < len(format_row) and format_row[i + 1].strip().upper() == "PPV":
-                            tran_index = i + 1
-                        elif i - 1 >= 0 and i - 1 < len(format_row) and format_row[i - 1].strip().upper() == "PPV":
-                            tran_index = i - 1
+                            unit_val = header_row[i + 1].strip().lower() if i + 1 < len(header_row) and header_row[i + 1] else ""
+                            if "in/s" in unit_val:
+                                tran_index = i + 1
                     
                     # For Vert PPV: column_row should have "VERT" and format_row should have "PPV" in same column
-                    if col_name_val == "VERT" and format_val == "PPV" and vert_index is None:
-                        vert_index = i
+                    if col_name_val == "VERT" and format_val == "PPV":
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "in/s" in unit_val and vert_index is None:
+                            vert_index = i
                     elif col_name_val == "VERT" and vert_index is None:
                         if format_val == "PPV":
-                            vert_index = i
+                            unit_val = header_col.strip().lower() if header_col else ""
+                            if "in/s" in unit_val:
+                                vert_index = i
                         elif i + 1 < len(format_row) and format_row[i + 1].strip().upper() == "PPV":
-                            vert_index = i + 1
-                        elif i - 1 >= 0 and i - 1 < len(format_row) and format_row[i - 1].strip().upper() == "PPV":
-                            vert_index = i - 1
+                            unit_val = header_row[i + 1].strip().lower() if i + 1 < len(header_row) and header_row[i + 1] else ""
+                            if "in/s" in unit_val:
+                                vert_index = i + 1
                     
                     # For Long PPV: column_row should have "LONG" and format_row should have "PPV" in same column
-                    if col_name_val == "LONG" and format_val == "PPV" and long_index is None:
-                        long_index = i
+                    if col_name_val == "LONG" and format_val == "PPV":
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "in/s" in unit_val and long_index is None:
+                            long_index = i
                     elif col_name_val == "LONG" and long_index is None:
                         if format_val == "PPV":
-                            long_index = i
+                            unit_val = header_col.strip().lower() if header_col else ""
+                            if "in/s" in unit_val:
+                                long_index = i
                         elif i + 1 < len(format_row) and format_row[i + 1].strip().upper() == "PPV":
-                            long_index = i + 1
-                        elif i - 1 >= 0 and i - 1 < len(format_row) and format_row[i - 1].strip().upper() == "PPV":
-                            long_index = i - 1
+                            unit_val = header_row[i + 1].strip().lower() if i + 1 < len(header_row) and header_row[i + 1] else ""
+                            if "in/s" in unit_val:
+                                long_index = i + 1
                     
-                    # For Geophone: column_row should have "GEOPHONE" and format_row should have "PVS" (or check if format is PVS)
+                    # For Geophone: column_row should have "GEOPHONE" and format_row should have "PVS", header_row should have "in/s"
                     if col_name_val == "GEOPHONE" and geophone_index is None:
                         # Check if format is PVS in the same column
                         if format_val == "PVS":
-                            geophone_index = i
-                        # Or if format_row doesn't have PVS, just use the column if it exists
+                            unit_val = header_col.strip().lower() if header_col else ""
+                            if "in/s" in unit_val:
+                                geophone_index = i
+                        # Or if format_row doesn't have PVS, just use the column if it exists and has in/s
                         else:
-                            geophone_index = i
+                            unit_val = header_col.strip().lower() if header_col else ""
+                            if "in/s" in unit_val:
+                                geophone_index = i
                     
                     # Also check if column names appear in header_row (fallback, though less likely based on structure)
                     if header_col == "TRAN" and format_val == "PPV" and tran_index is None:
-                        tran_index = i
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "in/s" in unit_val or not unit_val:  # Allow if unit not found as fallback
+                            tran_index = i
                     elif header_col == "VERT" and format_val == "PPV" and vert_index is None:
-                        vert_index = i
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "in/s" in unit_val or not unit_val:
+                            vert_index = i
                     elif header_col == "LONG" and format_val == "PPV" and long_index is None:
-                        long_index = i
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "in/s" in unit_val or not unit_val:
+                            long_index = i
                     elif header_col == "GEOPHONE" and geophone_index is None:
-                        geophone_index = i
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "in/s" in unit_val or not unit_val:
+                            geophone_index = i
                 
-                # Debug: Print found indices
+                # Fallback: If we still haven't found columns, try to match PPV with "in/s" units directly
+                # This handles cases where column names might not be found but format and units match
+                if tran_index is None or vert_index is None or long_index is None:
+                    for i in range(max_cols):
+                        if i == time_index:
+                            continue
+                        format_val = format_row[i].strip().upper() if i < len(format_row) and format_row[i] else ""
+                        unit_val = header_row[i].strip().lower() if i < len(header_row) and header_row[i] else ""
+                        unit_val_lower = unit_val.lower() if unit_val else ""
+                        
+                        if format_val == "PPV" and "in/s" in unit_val_lower:
+                            # Assign to first available PPV column
+                            if tran_index is None:
+                                tran_index = i
+                            elif vert_index is None:
+                                vert_index = i
+                            elif long_index is None:
+                                long_index = i
+                
+                # Fallback for Geophone: Find PVS with "in/s"
+                if geophone_index is None:
+                    for i in range(max_cols):
+                        if i == time_index:
+                            continue
+                        format_val = format_row[i].strip().upper() if i < len(format_row) and format_row[i] else ""
+                        unit_val = header_row[i].strip().lower() if i < len(header_row) and header_row[i] else ""
+                        if format_val == "PVS" and "in/s" in unit_val:
+                            geophone_index = i
+                
+                # Debug: Print row contents and found indices
                 print(f"File {os.path.basename(file_path)}: PPV at row {ppv_row_idx + 1}, TIME at row {header_row_idx + 1}")
+                print(f"  Column row (row {format_row_idx - 1}): {column_row[:10] if len(column_row) > 10 else column_row}")
+                print(f"  Format row (row {format_row_idx}): {format_row[:10] if len(format_row) > 10 else format_row}")
+                print(f"  Header row (row {header_row_idx}): {header_row[:10] if len(header_row) > 10 else header_row}")
                 print(f"  Found indices - Tran: {tran_index}, Vert: {vert_index}, Long: {long_index}, Geophone: {geophone_index}")
                 
                 # Process readings from row after header onwards
