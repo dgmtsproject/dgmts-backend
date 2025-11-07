@@ -443,11 +443,13 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
 def get_um16368_readings():
     """
     Parse CSV files from /root/root/ftp-server/Dulles Test/UM16368/CSV directory
-    and extract readings according to the specified structure:
-    - Row 67 (index 66): Column names (Tran, Vert, Long, Geophone)
-    - Row 68 (index 67): Reading formats (Tran: PPV, Vert: PPV, Long: PPV, Geophone: PVS)
-    - Row 69 (index 68): Time column and units
-    - Row 70+ (index 69+): Actual readings
+    and extract readings dynamically by finding the header structure:
+    - Search for "PPV" in any cell
+    - When found, check the row 2 rows after (second row after PPV row)
+    - That row should have "TIME" in the first column - this is the header row
+    - The row 1 row after PPV is the format row
+    - The row with PPV contains column names or format indicators
+    - Rows below the header row contain the actual readings
     
     Returns a list of readings with key-value pairs for each timestamp.
     """
@@ -498,33 +500,62 @@ def get_um16368_readings():
                 reader = csv.reader(file)
                 rows = list(reader)
                 
-                # Check if file has enough rows (at least 70 rows needed)
-                if len(rows) < 70:
-                    errors.append(f'File {os.path.basename(file_path)} has less than 70 rows')
+                if len(rows) < 3:
+                    errors.append(f'File {os.path.basename(file_path)} has less than 3 rows')
                     continue
                 
-                # Row 67 (index 66): Column names
-                column_row = rows[66]  # 0-indexed, so row 67 is index 66
+                # Dynamically find the header structure by searching for PPV
+                ppv_row_idx = None
+                header_row_idx = None
+                format_row_idx = None
+                column_row_idx = None
                 
-                # Row 68 (index 67): Reading formats
-                format_row = rows[67]  # 0-indexed, so row 68 is index 67
+                # Search for PPV in any cell
+                for row_idx, row in enumerate(rows):
+                    for col_idx, cell in enumerate(row):
+                        if cell and cell.strip().upper() == "PPV":
+                            ppv_row_idx = row_idx
+                            break
+                    if ppv_row_idx is not None:
+                        break
                 
-                # Row 69 (index 68): Time and units
-                units_row = rows[68]  # 0-indexed, so row 69 is index 68
+                if ppv_row_idx is None:
+                    errors.append(f'File {os.path.basename(file_path)}: PPV not found in file')
+                    continue
                 
-                # Find Time column index (first column usually, or search for it)
+                # Check if row 2 rows after PPV has TIME in first column
+                time_header_row_idx = ppv_row_idx + 2
+                if time_header_row_idx < len(rows):
+                    first_col = rows[time_header_row_idx][0].strip().upper() if rows[time_header_row_idx] and len(rows[time_header_row_idx]) > 0 else ""
+                    if first_col == "TIME":
+                        header_row_idx = time_header_row_idx
+                        format_row_idx = ppv_row_idx + 1
+                        column_row_idx = ppv_row_idx
+                    else:
+                        errors.append(f'File {os.path.basename(file_path)}: TIME not found in first column 2 rows after PPV (row {time_header_row_idx + 1})')
+                        continue
+                else:
+                    errors.append(f'File {os.path.basename(file_path)}: Not enough rows after PPV (found at row {ppv_row_idx + 1})')
+                    continue
+                
+                # Get the header rows
+                column_row = rows[column_row_idx] if column_row_idx < len(rows) else []
+                format_row = rows[format_row_idx] if format_row_idx < len(rows) else []
+                units_row = rows[header_row_idx] if header_row_idx < len(rows) else []
+                
+                # Find Time column index (should be first column based on logic, but search to be sure)
                 time_index = 0  # Default to first column
-                for i, col_name in enumerate(column_row):
+                for i, col_name in enumerate(units_row):
                     col_name_upper = col_name.strip().upper() if col_name else ""
                     if col_name_upper == "TIME":
                         time_index = i
                         break
                 
                 # Find column indices by matching pattern across all three rows
-                # For Tran: Row 67 = "Tran", Row 68 = "PPV", Row 69 = "in/s"
-                # For Vert: Row 67 = "Vert", Row 68 = "PPV", Row 69 = "in/s"
-                # For Long: Row 67 = "Long", Row 68 = "PPV", Row 69 = "in/s"
-                # For Geophone: Row 67 = "Geophone", Row 68 = "PVS" (keep as is)
+                # For Tran: column_row = "Tran", format_row = "PPV", units_row = "in/s"
+                # For Vert: column_row = "Vert", format_row = "PPV", units_row = "in/s"
+                # For Long: column_row = "Long", format_row = "PPV", units_row = "in/s"
+                # For Geophone: column_row = "Geophone", format_row = "PVS" (keep as is)
                 tran_index = None
                 vert_index = None
                 long_index = None
@@ -552,9 +583,9 @@ def get_um16368_readings():
                     elif col_name == "GEOPHONE":
                         geophone_index = i
                 
-                # Process readings from row 70 onwards (index 69+)
+                # Process readings from row after header onwards
                 file_readings = []
-                for row_idx in range(69, len(rows)):
+                for row_idx in range(header_row_idx + 1, len(rows)):
                     row = rows[row_idx]
                     
                     # Skip empty rows
@@ -603,7 +634,7 @@ def get_um16368_readings():
                     if geophone_index is not None and geophone_index < len(row):
                         geophone_value = row[geophone_index].strip()
                         if geophone_value:
-                            # Get the format from row 68 for Geophone
+                            # Get the format from format_row for Geophone
                             geophone_format = format_row[geophone_index].strip() if geophone_index < len(format_row) else "PVS"
                             try:
                                 reading[f'Geophone_{geophone_format}'] = float(geophone_value)

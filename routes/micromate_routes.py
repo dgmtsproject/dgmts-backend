@@ -162,11 +162,12 @@ def check_micromate_alerts():
 def get_um16368_readings_endpoint():
     """
     Get all readings from CSV files in /root/root/ftp-server/Dulles Test/UM16368/CSV directory.
-    Returns readings parsed from CSV files with the following structure:
-    - Row 67: Column names (Tran, Vert, Long, Geophone)
-    - Row 68: Reading formats (Tran: PPV, Vert: PPV, Long: PPV, Geophone: PVS)
-    - Row 69: Time column and units
-    - Row 70+: Actual readings
+    Returns readings parsed from CSV files with dynamic header detection:
+    - Searches for "PPV" in any cell to locate the header structure
+    - Row with PPV: Column names (Tran, Vert, Long, Geophone)
+    - Row 1 after PPV: Reading formats (Tran: PPV, Vert: PPV, Long: PPV, Geophone: PVS)
+    - Row 2 after PPV: Time column and units (first column should be "TIME")
+    - Rows after header: Actual readings
     
     Each reading contains Time, source_file, and readings (key-value pairs).
     """
