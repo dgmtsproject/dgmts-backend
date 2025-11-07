@@ -538,11 +538,13 @@ def get_um16368_readings():
                     errors.append(f'File {os.path.basename(file_path)}: Not enough rows after PPV (found at row {ppv_row_idx + 1})')
                     continue
                 
-                # Get the header rows
-                # Row with PPV: Contains formats (PPV, PVS, etc.)
-                # Row 1 after PPV (header_row): Contains TIME in first column, column names, and units
+                # Get the header rows based on the actual structure:
+                # Row 2 before PPV (column_row): Contains column names (Tran, Vert, Long, Geophone)
+                # Row with PPV (format_row): Contains formats (PPV, Freq, PVS, etc.)
+                # Row 1 after PPV (header_row): Contains TIME in first column and units (in/s, Hz, etc.)
                 format_row = rows[format_row_idx] if format_row_idx < len(rows) else []
                 header_row = rows[header_row_idx] if header_row_idx < len(rows) else []
+                column_row = rows[format_row_idx - 2] if format_row_idx >= 2 else []
                 
                 # Find Time column index (should be first column based on logic, but search to be sure)
                 time_index = 0  # Default to first column
@@ -553,17 +555,17 @@ def get_um16368_readings():
                         break
                 
                 # Find column indices by matching pattern
-                # Structure can vary, but typically:
-                # - format_row (row with PPV) has formats (PPV, PVS) and possibly column names
-                # - header_row (row with TIME) has TIME in first column, column names, and units
-                # We'll check both rows for column names and match with formats
+                # Structure: column_row (2 rows before PPV) has column names, format_row has formats, header_row has units
+                # We need to match: column name in column_row + format "PPV" in format_row (same column index)
+                # Column names might span multiple columns, so we check if the column name appears in the column_row
+                # and then verify that the same column in format_row has "PPV"
                 tran_index = None
                 vert_index = None
                 long_index = None
                 geophone_index = None
                 
-                # Find the maximum column count across both rows
-                max_cols = max(len(format_row), len(header_row))
+                # Find the maximum column count across all rows
+                max_cols = max(len(format_row), len(header_row), len(column_row))
                 
                 for i in range(max_cols):
                     # Get values from each row (safe access)
@@ -573,36 +575,88 @@ def get_um16368_readings():
                     
                     format_val = format_row[i].strip().upper() if i < len(format_row) and format_row[i] else ""
                     header_col = header_row[i].strip().upper() if i < len(header_row) and header_row[i] else ""
+                    col_name_val = column_row[i].strip().upper() if i < len(column_row) and column_row[i] else ""
                     
-                    # Check for column names in header_row first, then in format_row
-                    col_name = header_col if header_col in ["TRAN", "VERT", "LONG", "GEOPHONE"] else (format_val if format_val in ["TRAN", "VERT", "LONG", "GEOPHONE"] else "")
-                    
-                    # Match Tran: column name "TRAN" and format "PPV" in same column
-                    # Check both: header_row has column name + format_row has format, OR format_row has column name + header_row has format
-                    if (col_name == "TRAN" and format_val == "PPV") or (format_val == "TRAN" and header_col == "PPV"):
+                    # Check if column name appears in column_row (2 rows before PPV)
+                    # Column names might be in the exact column or might span, so check current column
+                    # For Tran PPV: column_row should have "TRAN" and format_row should have "PPV" in same column
+                    if col_name_val == "TRAN" and format_val == "PPV" and tran_index is None:
                         tran_index = i
-                    # Match Vert: column name "VERT" and format "PPV" in same column
-                    elif (col_name == "VERT" and format_val == "PPV") or (format_val == "VERT" and header_col == "PPV"):
+                    # Also check if "TRAN" appears in adjacent columns (in case of merged cells)
+                    elif col_name_val == "TRAN" and tran_index is None:
+                        # Check if format_row has PPV in this column or adjacent columns
+                        if format_val == "PPV":
+                            tran_index = i
+                        elif i + 1 < len(format_row) and format_row[i + 1].strip().upper() == "PPV":
+                            tran_index = i + 1
+                        elif i - 1 >= 0 and i - 1 < len(format_row) and format_row[i - 1].strip().upper() == "PPV":
+                            tran_index = i - 1
+                    
+                    # For Vert PPV: column_row should have "VERT" and format_row should have "PPV" in same column
+                    if col_name_val == "VERT" and format_val == "PPV" and vert_index is None:
                         vert_index = i
-                    # Match Long: column name "LONG" and format "PPV" in same column
-                    elif (col_name == "LONG" and format_val == "PPV") or (format_val == "LONG" and header_col == "PPV"):
+                    elif col_name_val == "VERT" and vert_index is None:
+                        if format_val == "PPV":
+                            vert_index = i
+                        elif i + 1 < len(format_row) and format_row[i + 1].strip().upper() == "PPV":
+                            vert_index = i + 1
+                        elif i - 1 >= 0 and i - 1 < len(format_row) and format_row[i - 1].strip().upper() == "PPV":
+                            vert_index = i - 1
+                    
+                    # For Long PPV: column_row should have "LONG" and format_row should have "PPV" in same column
+                    if col_name_val == "LONG" and format_val == "PPV" and long_index is None:
                         long_index = i
-                    # Match Geophone: column name "GEOPHONE" (format can be PVS or found in format_row)
-                    elif col_name == "GEOPHONE" or format_val == "GEOPHONE":
+                    elif col_name_val == "LONG" and long_index is None:
+                        if format_val == "PPV":
+                            long_index = i
+                        elif i + 1 < len(format_row) and format_row[i + 1].strip().upper() == "PPV":
+                            long_index = i + 1
+                        elif i - 1 >= 0 and i - 1 < len(format_row) and format_row[i - 1].strip().upper() == "PPV":
+                            long_index = i - 1
+                    
+                    # For Geophone: column_row should have "GEOPHONE" and format_row should have "PVS" (or check if format is PVS)
+                    if col_name_val == "GEOPHONE" and geophone_index is None:
+                        # Check if format is PVS in the same column
+                        if format_val == "PVS":
+                            geophone_index = i
+                        # Or if format_row doesn't have PVS, just use the column if it exists
+                        else:
+                            geophone_index = i
+                    
+                    # Also check if column names appear in header_row (fallback, though less likely based on structure)
+                    if header_col == "TRAN" and format_val == "PPV" and tran_index is None:
+                        tran_index = i
+                    elif header_col == "VERT" and format_val == "PPV" and vert_index is None:
+                        vert_index = i
+                    elif header_col == "LONG" and format_val == "PPV" and long_index is None:
+                        long_index = i
+                    elif header_col == "GEOPHONE" and geophone_index is None:
                         geophone_index = i
+                
+                # Debug: Print found indices
+                print(f"File {os.path.basename(file_path)}: PPV at row {ppv_row_idx + 1}, TIME at row {header_row_idx + 1}")
+                print(f"  Found indices - Tran: {tran_index}, Vert: {vert_index}, Long: {long_index}, Geophone: {geophone_index}")
                 
                 # Process readings from row after header onwards
                 file_readings = []
+                rows_processed = 0
+                rows_skipped_empty = 0
+                rows_skipped_no_time = 0
+                rows_skipped_no_data = 0
+                
                 for row_idx in range(header_row_idx + 1, len(rows)):
                     row = rows[row_idx]
+                    rows_processed += 1
                     
                     # Skip empty rows
                     if not row or (len(row) == 1 and not row[0].strip()):
+                        rows_skipped_empty += 1
                         continue
                     
                     # Extract time
                     time_value = row[time_index].strip() if time_index < len(row) else ""
                     if not time_value:
+                        rows_skipped_no_time += 1
                         continue
                     
                     # Build reading object with all values at the same level
@@ -652,6 +706,11 @@ def get_um16368_readings():
                     # Only add reading if it has at least one reading value (excluding Time and source_file)
                     if len(reading) > 2:  # More than just Time and source_file
                         file_readings.append(reading)
+                    else:
+                        rows_skipped_no_data += 1
+                
+                # Debug: Print processing stats
+                print(f"  Processed {rows_processed} rows: {len(file_readings)} readings, {rows_skipped_empty} empty, {rows_skipped_no_time} no time, {rows_skipped_no_data} no data")
                 
                 all_readings.extend(file_readings)
                 processed_files.append({
@@ -686,3 +745,4 @@ def get_um16368_readings():
         'processed_files': processed_files,
         'errors': errors if errors else []
     }
+
