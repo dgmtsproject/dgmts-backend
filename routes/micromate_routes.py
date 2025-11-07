@@ -163,10 +163,10 @@ def get_um16368_readings_endpoint():
     """
     Get all readings from CSV files in /root/root/ftp-server/Dulles Test/UM16368/CSV directory.
     Returns readings parsed from CSV files with dynamic header detection:
+    - Only processes files ending with IDFH.csv (excludes IDFW.csv files)
     - Searches for "PPV" in any cell to locate the header structure
-    - Row with PPV: Column names (Tran, Vert, Long, Geophone)
-    - Row 1 after PPV: Reading formats (Tran: PPV, Vert: PPV, Long: PPV, Geophone: PVS)
-    - Row 2 after PPV: Time column and units (first column should be "TIME")
+    - Row with PPV: Contains formats (PPV, PVS, etc.)
+    - Row 1 after PPV: Contains TIME in first column, column names (Tran, Vert, Long, Geophone), and units
     - Rows after header: Actual readings
     
     Each reading contains Time, source_file, and readings (key-value pairs).

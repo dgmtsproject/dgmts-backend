@@ -444,10 +444,10 @@ def get_um16368_readings():
     """
     Parse CSV files from /root/root/ftp-server/Dulles Test/UM16368/CSV directory
     and extract readings dynamically by finding the header structure:
+    - Only processes files ending with IDFH.csv (excludes IDFW.csv files)
     - Search for "PPV" in any cell
-    - When found, check the row 2 rows after (second row after PPV row)
+    - When found, check the row 1 row after PPV (next row after PPV row)
     - That row should have "TIME" in the first column - this is the header row
-    - The row 1 row after PPV is the format row
     - The row with PPV contains column names or format indicators
     - Rows below the header row contain the actual readings
     
@@ -469,12 +469,12 @@ def get_um16368_readings():
             'errors': [f'CSV directory not found: {csv_directory}']
         }
     
-    # Find all CSV files in the directory
-    pattern = os.path.join(csv_directory, "*.csv")
+    # Find all IDFH.csv files in the directory (only process IDFH files, not IDFW)
+    pattern = os.path.join(csv_directory, "*IDFH.csv")
     csv_files = glob.glob(pattern)
     
     if not csv_files:
-        print(f"No CSV files found in directory: {csv_directory}")
+        print(f"No IDFH.csv files found in directory: {csv_directory}")
         return {
             'readings': [],
             'summary': {
@@ -484,7 +484,7 @@ def get_um16368_readings():
                 'errors_count': 1
             },
             'processed_files': [],
-            'errors': [f'No CSV files found in directory: {csv_directory}']
+            'errors': [f'No IDFH.csv files found in directory: {csv_directory}']
         }
     
     # Sort files by name
@@ -523,64 +523,72 @@ def get_um16368_readings():
                     errors.append(f'File {os.path.basename(file_path)}: PPV not found in file')
                     continue
                 
-                # Check if row 2 rows after PPV has TIME in first column
-                time_header_row_idx = ppv_row_idx + 2
+                # Check if row 1 row after PPV has TIME in first column
+                time_header_row_idx = ppv_row_idx + 1
                 if time_header_row_idx < len(rows):
                     first_col = rows[time_header_row_idx][0].strip().upper() if rows[time_header_row_idx] and len(rows[time_header_row_idx]) > 0 else ""
                     if first_col == "TIME":
                         header_row_idx = time_header_row_idx
-                        format_row_idx = ppv_row_idx + 1
+                        format_row_idx = ppv_row_idx
                         column_row_idx = ppv_row_idx
                     else:
-                        errors.append(f'File {os.path.basename(file_path)}: TIME not found in first column 2 rows after PPV (row {time_header_row_idx + 1})')
+                        errors.append(f'File {os.path.basename(file_path)}: TIME not found in first column 1 row after PPV (row {time_header_row_idx + 1})')
                         continue
                 else:
                     errors.append(f'File {os.path.basename(file_path)}: Not enough rows after PPV (found at row {ppv_row_idx + 1})')
                     continue
                 
                 # Get the header rows
-                column_row = rows[column_row_idx] if column_row_idx < len(rows) else []
+                # Row with PPV: Contains formats (PPV, PVS, etc.)
+                # Row 1 after PPV (header_row): Contains TIME in first column, column names, and units
                 format_row = rows[format_row_idx] if format_row_idx < len(rows) else []
-                units_row = rows[header_row_idx] if header_row_idx < len(rows) else []
+                header_row = rows[header_row_idx] if header_row_idx < len(rows) else []
                 
                 # Find Time column index (should be first column based on logic, but search to be sure)
                 time_index = 0  # Default to first column
-                for i, col_name in enumerate(units_row):
+                for i, col_name in enumerate(header_row):
                     col_name_upper = col_name.strip().upper() if col_name else ""
                     if col_name_upper == "TIME":
                         time_index = i
                         break
                 
-                # Find column indices by matching pattern across all three rows
-                # For Tran: column_row = "Tran", format_row = "PPV", units_row = "in/s"
-                # For Vert: column_row = "Vert", format_row = "PPV", units_row = "in/s"
-                # For Long: column_row = "Long", format_row = "PPV", units_row = "in/s"
-                # For Geophone: column_row = "Geophone", format_row = "PVS" (keep as is)
+                # Find column indices by matching pattern
+                # Structure can vary, but typically:
+                # - format_row (row with PPV) has formats (PPV, PVS) and possibly column names
+                # - header_row (row with TIME) has TIME in first column, column names, and units
+                # We'll check both rows for column names and match with formats
                 tran_index = None
                 vert_index = None
                 long_index = None
                 geophone_index = None
                 
-                # Find the maximum column count across all three rows
-                max_cols = max(len(column_row), len(format_row), len(units_row))
+                # Find the maximum column count across both rows
+                max_cols = max(len(format_row), len(header_row))
                 
                 for i in range(max_cols):
                     # Get values from each row (safe access)
-                    col_name = column_row[i].strip().upper() if i < len(column_row) and column_row[i] else ""
-                    format_val = format_row[i].strip().upper() if i < len(format_row) and format_row[i] else ""
-                    unit_val = units_row[i].strip().lower() if i < len(units_row) and units_row[i] else ""
+                    # Skip TIME column when matching
+                    if i == time_index:
+                        continue
                     
-                    # Match Tran: column name "TRAN", format "PPV", unit "in/s"
-                    if col_name == "TRAN" and format_val == "PPV" and "in/s" in unit_val:
+                    format_val = format_row[i].strip().upper() if i < len(format_row) and format_row[i] else ""
+                    header_col = header_row[i].strip().upper() if i < len(header_row) and header_row[i] else ""
+                    
+                    # Check for column names in header_row first, then in format_row
+                    col_name = header_col if header_col in ["TRAN", "VERT", "LONG", "GEOPHONE"] else (format_val if format_val in ["TRAN", "VERT", "LONG", "GEOPHONE"] else "")
+                    
+                    # Match Tran: column name "TRAN" and format "PPV" in same column
+                    # Check both: header_row has column name + format_row has format, OR format_row has column name + header_row has format
+                    if (col_name == "TRAN" and format_val == "PPV") or (format_val == "TRAN" and header_col == "PPV"):
                         tran_index = i
-                    # Match Vert: column name "VERT", format "PPV", unit "in/s"
-                    elif col_name == "VERT" and format_val == "PPV" and "in/s" in unit_val:
+                    # Match Vert: column name "VERT" and format "PPV" in same column
+                    elif (col_name == "VERT" and format_val == "PPV") or (format_val == "VERT" and header_col == "PPV"):
                         vert_index = i
-                    # Match Long: column name "LONG", format "PPV", unit "in/s"
-                    elif col_name == "LONG" and format_val == "PPV" and "in/s" in unit_val:
+                    # Match Long: column name "LONG" and format "PPV" in same column
+                    elif (col_name == "LONG" and format_val == "PPV") or (format_val == "LONG" and header_col == "PPV"):
                         long_index = i
-                    # Match Geophone: column name "GEOPHONE" (format can be PVS, keep as is)
-                    elif col_name == "GEOPHONE":
+                    # Match Geophone: column name "GEOPHONE" (format can be PVS or found in format_row)
+                    elif col_name == "GEOPHONE" or format_val == "GEOPHONE":
                         geophone_index = i
                 
                 # Process readings from row after header onwards
