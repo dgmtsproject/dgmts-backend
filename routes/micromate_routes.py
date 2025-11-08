@@ -1,9 +1,10 @@
 import os
 import json
 import glob
-from flask import Blueprint, jsonify, current_app
+import re
+from flask import Blueprint, jsonify, current_app, request
 from config import Config
-from services.micromate_service import check_and_send_micromate_alert, get_um16368_readings
+from services.micromate_service import check_and_send_micromate_alert, check_and_send_instantel2_alert, get_um16368_readings
 
 micromate_bp = Blueprint('micromate', __name__, url_prefix='/api/micromate')
 
@@ -144,7 +145,7 @@ def list_h_files():
 def check_micromate_alerts():
     """
     Check Instantel Micromate alerts and send emails if thresholds are exceeded.
-    This endpoint triggers the alert checking process.
+    This endpoint triggers the alert checking process using instrument-configured emails.
     """
     try:
         check_and_send_micromate_alert()
@@ -155,6 +156,204 @@ def check_micromate_alerts():
     except Exception as e:
         return jsonify({
             'error': f'Failed to check Micromate alerts: {str(e)}',
+            'message': 'An error occurred while checking alerts'
+        }), 500
+
+@micromate_bp.route('/check-alerts-custom', methods=['POST'])
+def check_micromate_alerts_custom():
+    """
+    Check Instantel Micromate alerts for all axes over the past 1 week and send emails to custom email addresses.
+    
+    Request body (JSON):
+    {
+        "emails": ["email1@example.com", "email2@example.com"],
+        "force_resend": false  // Optional: if true, will resend even if alert was already sent (for testing)
+    }
+    
+    This endpoint checks all three axes (Longitudinal, Transverse, Vertical) for the past 7 days
+    and sends alerts to the provided email addresses if any thresholds are exceeded.
+    The time window is 1 week (10,080 minutes) from the current time.
+    
+    Note: This is a TEST endpoint and does not affect the production scheduled alerts.
+    """
+    try:
+        # Get request data
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'error': 'No request body provided',
+                'message': 'Please provide email addresses in the request body'
+            }), 400
+        
+        emails = data.get('emails', [])
+        force_resend = data.get('force_resend', False)  # Default to False for safety
+        
+        if not emails:
+            return jsonify({
+                'error': 'No email addresses provided',
+                'message': 'Please provide at least one email address in the "emails" field'
+            }), 400
+        
+        if not isinstance(emails, list):
+            return jsonify({
+                'error': 'Invalid email format',
+                'message': 'Emails must be provided as a list/array'
+            }), 400
+        
+        # Validate email format (basic validation)
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        invalid_emails = [email for email in emails if not re.match(email_pattern, str(email))]
+        if invalid_emails:
+            return jsonify({
+                'error': 'Invalid email addresses',
+                'message': f'The following email addresses are invalid: {invalid_emails}'
+            }), 400
+        
+        # Check alerts with custom emails for the past 1 week (7 days = 10080 minutes)
+        one_week_minutes = 7 * 24 * 60  # 10080 minutes
+        result = check_and_send_micromate_alert(custom_emails=emails, time_window_minutes=one_week_minutes, force_resend=force_resend)
+        
+        response_data = {
+            'message': 'Micromate alert check completed successfully',
+            'status': 'success',
+            'emails_sent_to': emails,
+            'total_recipients': len(emails),
+            'time_window': '1 week (7 days)',
+            'time_window_minutes': one_week_minutes
+        }
+        
+        # Add detailed results if available
+        if result:
+            response_data.update({
+                'total_readings_checked': result.get('total_readings_checked', 0),
+                'readings_with_alerts': result.get('readings_with_alerts', 0),
+                'readings_already_sent': result.get('readings_already_sent', 0),
+                'emails_sent': result.get('emails_sent', 0),
+                'alert_timestamps': result.get('alert_timestamps', []),
+                'skipped_timestamps_count': len(result.get('skipped_timestamps', [])),
+                'force_resend': force_resend,
+                'test_mode': True  # Indicate this is a test endpoint
+            })
+            
+            # Add error if any
+            if 'error' in result:
+                response_data['error'] = result['error']
+                response_data['status'] = 'error'
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        return jsonify({
+            'error': f'Failed to check Micromate alerts: {str(e)}',
+            'message': 'An error occurred while checking alerts'
+        }), 500
+
+@micromate_bp.route('/instantel2/check-alerts', methods=['POST'])
+def check_instantel2_alerts():
+    """
+    Check Instantel 2 (UM16368) alerts and send emails if thresholds are exceeded.
+    This endpoint triggers the alert checking process using instrument-configured emails.
+    """
+    try:
+        check_and_send_instantel2_alert()
+        return jsonify({
+            'message': 'Instantel 2 alert check completed successfully',
+            'status': 'success'
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'error': f'Failed to check Instantel 2 alerts: {str(e)}',
+            'message': 'An error occurred while checking alerts'
+        }), 500
+
+@micromate_bp.route('/instantel2/check-alerts-custom', methods=['POST'])
+def check_instantel2_alerts_custom():
+    """
+    Check Instantel 2 (UM16368) alerts for all axes over the past 1 week and send emails to custom email addresses.
+    
+    Request body (JSON):
+    {
+        "emails": ["email1@example.com", "email2@example.com"],
+        "force_resend": false  // Optional: if true, will resend even if alert was already sent (for testing)
+    }
+    
+    This endpoint checks all three axes (X-axis/Longitudinal, Y-axis/Transverse, Z-axis/Vertical) for the past 7 days
+    and sends alerts to the provided email addresses if any thresholds are exceeded.
+    The time window is 1 week (10,080 minutes) from the current time.
+    
+    Note: This is a TEST endpoint and does not affect the production scheduled alerts.
+    """
+    try:
+        # Get request data
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'error': 'No request body provided',
+                'message': 'Please provide email addresses in the request body'
+            }), 400
+        
+        emails = data.get('emails', [])
+        force_resend = data.get('force_resend', False)  # Default to False for safety
+        
+        if not emails:
+            return jsonify({
+                'error': 'No email addresses provided',
+                'message': 'Please provide at least one email address in the "emails" field'
+            }), 400
+        
+        if not isinstance(emails, list):
+            return jsonify({
+                'error': 'Invalid email format',
+                'message': 'Emails must be provided as a list/array'
+            }), 400
+        
+        # Validate email format (basic validation)
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        invalid_emails = [email for email in emails if not re.match(email_pattern, str(email))]
+        if invalid_emails:
+            return jsonify({
+                'error': 'Invalid email addresses',
+                'message': f'The following email addresses are invalid: {invalid_emails}'
+            }), 400
+        
+        # Check alerts with custom emails for the past 1 week (7 days = 10080 minutes)
+        one_week_minutes = 7 * 24 * 60  # 10080 minutes
+        result = check_and_send_instantel2_alert(custom_emails=emails, time_window_minutes=one_week_minutes, force_resend=force_resend)
+        
+        response_data = {
+            'message': 'Instantel 2 alert check completed successfully',
+            'status': 'success',
+            'emails_sent_to': emails,
+            'total_recipients': len(emails),
+            'time_window': '1 week (7 days)',
+            'time_window_minutes': one_week_minutes
+        }
+        
+        # Add detailed results if available
+        if result:
+            response_data.update({
+                'total_readings_checked': result.get('total_readings_checked', 0),
+                'readings_with_alerts': result.get('readings_with_alerts', 0),
+                'readings_already_sent': result.get('readings_already_sent', 0),
+                'emails_sent': result.get('emails_sent', 0),
+                'alert_timestamps': result.get('alert_timestamps', []),
+                'skipped_timestamps_count': len(result.get('skipped_timestamps', [])),
+                'force_resend': force_resend,
+                'test_mode': True  # Indicate this is a test endpoint
+            })
+            
+            # Add error if any
+            if 'error' in result:
+                response_data['error'] = result['error']
+                response_data['status'] = 'error'
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        return jsonify({
+            'error': f'Failed to check Instantel 2 alerts: {str(e)}',
             'message': 'An error occurred while checking alerts'
         }), 500
 

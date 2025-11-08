@@ -92,16 +92,41 @@ def get_project_info(instrument_id):
         print(f"Error fetching project info for {instrument_id}: {e}")
         return None
 
-def check_and_send_micromate_alert():
-    """Check Instantel Micromate alerts and send emails if thresholds are exceeded"""
+def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=10, force_resend=False):
+    """Check Instantel Micromate alerts and send emails if thresholds are exceeded
+    
+    Args:
+        custom_emails (list, optional): Custom email addresses to use instead of instrument emails
+        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 10 minutes.
+        force_resend (bool, optional): If True, will resend alerts even if they were already sent (for testing). Default is False.
+    
+    Returns:
+        dict: Summary of the alert check including:
+            - total_readings_checked: Number of readings checked
+            - readings_with_alerts: Number of readings that exceeded thresholds
+            - readings_already_sent: Number of readings that already had alerts sent
+            - emails_sent: Number of emails sent
+            - alert_timestamps: List of timestamps that had alerts
+            - skipped_timestamps: List of timestamps that were skipped (already sent)
+    """
     print("Checking Instantel Micromate alerts...")
+    result_summary = {
+        'total_readings_checked': 0,
+        'readings_with_alerts': 0,
+        'readings_already_sent': 0,
+        'emails_sent': 0,
+        'alert_timestamps': [],
+        'skipped_timestamps': []
+    }
     try:
         # 1. Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'Instantel 1').execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
             print("No instrument found for Instantel 1")
-            return
+            log_alert_event("ERROR", f"In check_and_send_micromate_alert: No instrument found for Instantel 1", 'Instantel 1')
+            result_summary['error'] = "No instrument found for Instantel 1"
+            return result_summary
 
         # For micromate, use single values for each axis
         alert_value = instrument.get('alert_value')
@@ -111,17 +136,33 @@ def check_and_send_micromate_alert():
         alert_emails = instrument.get('alert_emails') or []
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
+        
+        # Use custom emails if provided, otherwise use instrument emails
+        if custom_emails:
+            alert_emails = custom_emails
+            warning_emails = custom_emails
+            shutdown_emails = custom_emails
+            print(f"Using custom emails for test: {custom_emails}")
 
-        # 2. Calculate time range for the last minute using UTC and convert to EST properly
+        # 2. Calculate time range for checking alerts
         # Account for instrument clock being 1 hour behind EST
         utc_now = datetime.now(timezone.utc)
         est_tz = pytz.timezone('US/Eastern')
         now_est = utc_now.astimezone(est_tz)
         # Subtract 1 hour to account for instrument clock being behind
         now_instrument_time = now_est - timedelta(hours=1)
-        one_minute_ago_instrument_time = now_instrument_time - timedelta(minutes=1)
+        # Calculate start time based on time_window_minutes parameter
+        start_instrument_time = now_instrument_time - timedelta(minutes=time_window_minutes)
         
-        print(f"Fetching Micromate data from {one_minute_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
+        # Format time window description
+        if time_window_minutes >= 1440:  # 1 day or more
+            time_window_desc = f"{time_window_minutes / 1440:.1f} days"
+        elif time_window_minutes >= 60:  # 1 hour or more
+            time_window_desc = f"{time_window_minutes / 60:.1f} hours"
+        else:
+            time_window_desc = f"{time_window_minutes} minutes"
+        
+        print(f"Checking Micromate data from {start_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST (last {time_window_desc})")
         print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
         print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
         print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
@@ -132,7 +173,8 @@ def check_and_send_micromate_alert():
         if response.status_code != 200:
             print(f"Failed to fetch Micromate data: {response.status_code} {response.text}")
             log_alert_event("ERROR", f"Failed to fetch Micromate data: {response.status_code} {response.text}", 'Instantel 1')
-            return
+            result_summary['error'] = f"Failed to fetch Micromate data: {response.status_code}"
+            return result_summary
 
         data = response.json()
         micromate_readings = data.get('MicromateReadings', [])
@@ -140,81 +182,94 @@ def check_and_send_micromate_alert():
         if not micromate_readings:
             print("No Micromate data received")
             log_alert_event("ERROR", "No Micromate data received", 'Instantel 1')
-            return
+            result_summary['error'] = "No Micromate data received"
+            return result_summary
 
         print(f"Received {len(micromate_readings)} Micromate data points")
 
-        # 4. Check thresholds for the most recent reading (Micromate reads every 5 minutes)
+        # 4. Check thresholds for readings within the time window
+        # Filter readings within the specified time window (accounting for instrument time offset)
         alerts_by_timestamp = {}
         
-        # Find the most recent reading
-        most_recent_reading = None
-        most_recent_time = None
+        # Convert time window to UTC for comparison
+        start_utc = start_instrument_time.astimezone(timezone.utc)
+        now_utc = now_instrument_time.astimezone(timezone.utc)
         
+        readings_in_window = []
         for reading in micromate_readings:
             try:
                 timestamp_str = reading['Time']
                 dt_utc = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                dt_est = dt_utc.astimezone(est_tz)
                 
-                if most_recent_time is None or dt_est > most_recent_time:
-                    most_recent_time = dt_est
-                    most_recent_reading = reading
+                # Check if reading is within the time window
+                if start_utc <= dt_utc <= now_utc:
+                    readings_in_window.append(reading)
                     
             except Exception as e:
                 print(f"Failed to parse timestamp: {e}")
                 continue
         
-        if not most_recent_reading:
-            print("No valid Micromate readings found")
-            return
+        if not readings_in_window:
+            print(f"No Micromate readings found in time window ({start_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} EST)")
+            log_alert_event("INFO", f"No Micromate readings found in time window ({start_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} EST)", 'Instantel 1')
+            return result_summary
+        
+        print(f"Found {len(readings_in_window)} readings in time window")
+        
+        # Check thresholds for all readings in the time window
+        result_summary['total_readings_checked'] = len(readings_in_window)
+        
+        for reading in readings_in_window:
+            timestamp_str = reading['Time']
+            longitudinal = abs(float(reading['Longitudinal']))
+            transverse = abs(float(reading['Transverse']))
+            vertical = abs(float(reading['Vertical']))
             
-        print(f"Most recent Micromate reading: {most_recent_reading['Time']} ({most_recent_time.strftime('%Y-%m-%d %H:%M:%S')} EST)")
-        
-        # Check thresholds for the most recent reading
-        timestamp_str = most_recent_reading['Time']
-        longitudinal = abs(float(most_recent_reading['Longitudinal']))
-        transverse = abs(float(most_recent_reading['Transverse']))
-        vertical = abs(float(most_recent_reading['Vertical']))
-        
-        # Check if we've already sent for this timestamp
-        already_sent = supabase.table('sent_alerts') \
-            .select('id') \
-            .eq('instrument_id', 'Instantel 1') \
-            .eq('node_id', 24252) \
-            .eq('timestamp', timestamp_str) \
-            .execute()
-        if already_sent.data:
-            print(f"Micromate alert already sent for timestamp {timestamp_str}, skipping.")
-            return
+            # Check if we've already sent for this timestamp (unless force_resend is True)
+            if not force_resend:
+                already_sent = supabase.table('sent_alerts') \
+                    .select('id') \
+                    .eq('instrument_id', 'Instantel 1') \
+                    .eq('node_id', 24252) \
+                    .eq('timestamp', timestamp_str) \
+                    .execute()
+                if already_sent.data:
+                    print(f"Micromate alert already sent for timestamp {timestamp_str}, skipping.")
+                    result_summary['readings_already_sent'] += 1
+                    result_summary['skipped_timestamps'].append(timestamp_str)
+                    continue
+            else:
+                print(f"Force resend enabled - checking timestamp {timestamp_str} even if already sent")
 
-        messages = []
-        
-        # Check shutdown thresholds
-        for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
-            if shutdown_value and value >= shutdown_value:
-                messages.append(f"<b>Shutdown threshold reached on {axis_desc} axis:</b> {value:.6f}")
-        
-        # Check warning thresholds
-        for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
-            if warning_value and value >= warning_value:
-                messages.append(f"<b>Warning threshold reached on {axis_desc} axis:</b> {value:.6f}")
-        
-        # Check alert thresholds
-        for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
-            if alert_value and value >= alert_value:
-                messages.append(f"<b>Alert threshold reached on {axis_desc} axis:</b> {value:.6f}")
+            messages = []
+            
+            # Check shutdown thresholds
+            for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+                if shutdown_value and value >= shutdown_value:
+                    messages.append(f"<b>Shutdown threshold reached on {axis_desc} axis:</b> {value:.6f}")
+            
+            # Check warning thresholds
+            for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+                if warning_value and value >= warning_value:
+                    messages.append(f"<b>Warning threshold reached on {axis_desc} axis:</b> {value:.6f}")
+            
+            # Check alert thresholds
+            for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+                if alert_value and value >= alert_value:
+                    messages.append(f"<b>Alert threshold reached on {axis_desc} axis:</b> {value:.6f}")
 
-        if messages:
-            alerts_by_timestamp[timestamp_str] = {
-                'messages': messages,
-                'timestamp': timestamp_str,
-                'values': {
-                    'Longitudinal': longitudinal, 
-                    'Transverse': transverse, 
-                    'Vertical': vertical
+            if messages:
+                result_summary['readings_with_alerts'] += 1
+                result_summary['alert_timestamps'].append(timestamp_str)
+                alerts_by_timestamp[timestamp_str] = {
+                    'messages': messages,
+                    'timestamp': timestamp_str,
+                    'values': {
+                        'Longitudinal': longitudinal, 
+                        'Transverse': transverse, 
+                        'Vertical': vertical
+                    }
                 }
-            }
 
         # 6. Send email if there are alerts
         if alerts_by_timestamp:
@@ -234,7 +289,8 @@ def check_and_send_micromate_alert():
             body = _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_details)
             
             current_time = datetime.now(timezone.utc)
-            current_time_est = current_time.astimezone(est)
+            est_tz = pytz.timezone('US/Eastern')
+            current_time_est = current_time.astimezone(est_tz)
             formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
             subject = f"📊 Micromate Alert Notification - {formatted_time}"
             
@@ -242,28 +298,468 @@ def check_and_send_micromate_alert():
             if all_emails:
                 email_sent = send_email(",".join(all_emails), subject, body)
                 if email_sent:
-                    print(f"Sent Micromate alert email for {len(alerts_by_timestamp)} timestamps with alerts")
+                    result_summary['emails_sent'] = 1
+                    print(f"Sent Micromate alert email for {len(alerts_by_timestamp)} timestamps with alerts to {len(all_emails)} recipients")
+                    log_alert_event("EMAIL_SENT", f"Alert email sent successfully to {len(all_emails)} recipients for {len(alerts_by_timestamp)} timestamps", 'Instantel 1')
                     
-                    # Record that we've sent for each timestamp
-                    for timestamp, alert_data in alerts_by_timestamp.items():
-                        # Determine the highest priority alert type
-                        alert_type = _determine_alert_type(alert_data['messages'])
-                        
-                        supabase.table('sent_alerts').insert({
-                            'instrument_id': 'Instantel 1',
-                            'node_id': 24252,
-                            'timestamp': alert_data['timestamp'],
-                            'alert_type': alert_type
-                        }).execute()
+                    # Record that we've sent for each timestamp (only if not force_resend, to avoid duplicates)
+                    if not force_resend:
+                        for timestamp, alert_data in alerts_by_timestamp.items():
+                            # Determine the highest priority alert type
+                            alert_type = _determine_alert_type(alert_data['messages'])
+                            
+                            sent_alert_resp = supabase.table('sent_alerts').insert({
+                                'instrument_id': 'Instantel 1',
+                                'node_id': 24252,
+                                'timestamp': alert_data['timestamp'],
+                                'alert_type': alert_type
+                            }).execute()
+                            if sent_alert_resp.data:
+                                alert_id = sent_alert_resp.data[0]['id']
+                                log_alert_event("ALERT_RECORDED", f"Alert recorded in sent_alerts table with ID {alert_id} for timestamp {timestamp}", 'Instantel 1', alert_id)
+                    else:
+                        print(f"Force resend mode: Skipping sent_alerts table insertion to avoid duplicates")
+                        log_alert_event("INFO", f"Force resend mode: Sent {len(alerts_by_timestamp)} alerts without recording in sent_alerts table", 'Instantel 1')
                 else:
                     log_alert_event("SEND EMAIL_FAILED", f"Failed to send alert email for Instantel 1", 'Instantel 1')
             else:
                 print("No alert/warning/shutdown emails configured for Instantel 1")
+                log_alert_event("ERROR", "No alert/warning/shutdown emails configured for Instantel 1", 'Instantel 1')
         else:
-            print("No thresholds crossed for any reading in the last minute for Micromate.")
+            print("No thresholds crossed for any reading in the time window for Micromate.")
+            log_alert_event("INFO", f"No thresholds crossed for any reading in the time window. Checked {len(readings_in_window)} readings.", 'Instantel 1')
+        
+        return result_summary
     except Exception as e:
         print(f"Error in check_and_send_micromate_alert: {e}")
         log_alert_event("ERROR", f"Error in check_and_send_micromate_alert: {e}", 'Instantel 1')
+        result_summary['error'] = str(e)
+        return result_summary
+
+def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=10, force_resend=False):
+    """Check Instantel 2 (UM16368) alerts and send emails if thresholds are exceeded
+    
+    Args:
+        custom_emails (list, optional): Custom email addresses to use instead of instrument emails
+        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 10 minutes.
+        force_resend (bool, optional): If True, will resend alerts even if they were already sent (for testing). Default is False.
+    
+    Returns:
+        dict: Summary of the alert check including:
+            - total_readings_checked: Number of readings checked
+            - readings_with_alerts: Number of readings that exceeded thresholds
+            - readings_already_sent: Number of readings that already had alerts sent
+            - emails_sent: Number of emails sent
+            - alert_timestamps: List of timestamps that had alerts
+            - skipped_timestamps: List of timestamps that were skipped (already sent)
+    """
+    print("Checking Instantel 2 (UM16368) alerts...")
+    result_summary = {
+        'total_readings_checked': 0,
+        'readings_with_alerts': 0,
+        'readings_already_sent': 0,
+        'emails_sent': 0,
+        'alert_timestamps': [],
+        'skipped_timestamps': []
+    }
+    try:
+        # 1. Get instrument settings
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'Instantel 2').execute()
+        instrument = instrument_resp.data[0] if instrument_resp.data else None
+        if not instrument:
+            print("No instrument found for Instantel 2")
+            log_alert_event("ERROR", f"In check_and_send_instantel2_alert: No instrument found for Instantel 2", 'Instantel 2')
+            result_summary['error'] = "No instrument found for Instantel 2"
+            return result_summary
+
+        # For Instantel 2, use single values for each axis
+        alert_value = instrument.get('alert_value')
+        warning_value = instrument.get('warning_value')
+        shutdown_value = instrument.get('shutdown_value')
+        
+        alert_emails = instrument.get('alert_emails') or []
+        warning_emails = instrument.get('warning_emails') or []
+        shutdown_emails = instrument.get('shutdown_emails') or []
+        
+        # Use custom emails if provided, otherwise use instrument emails
+        if custom_emails:
+            alert_emails = custom_emails
+            warning_emails = custom_emails
+            shutdown_emails = custom_emails
+            print(f"Using custom emails for test: {custom_emails}")
+
+        # 2. Calculate time range for checking alerts
+        # Account for instrument clock being 1 hour behind EST
+        utc_now = datetime.now(timezone.utc)
+        est_tz = pytz.timezone('US/Eastern')
+        now_est = utc_now.astimezone(est_tz)
+        # Subtract 1 hour to account for instrument clock being behind
+        now_instrument_time = now_est - timedelta(hours=1)
+        # Calculate start time based on time_window_minutes parameter
+        start_instrument_time = now_instrument_time - timedelta(minutes=time_window_minutes)
+        
+        # Format time window description
+        if time_window_minutes >= 1440:  # 1 day or more
+            time_window_desc = f"{time_window_minutes / 1440:.1f} days"
+        elif time_window_minutes >= 60:  # 1 hour or more
+            time_window_desc = f"{time_window_minutes / 60:.1f} hours"
+        else:
+            time_window_desc = f"{time_window_minutes} minutes"
+        
+        print(f"Checking Instantel 2 (UM16368) data from {start_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST (last {time_window_desc})")
+        print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
+        print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
+        print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
+
+        # 3. Fetch data from UM16368 API
+        url = "https://imsite.dullesgeotechnical.com/api/micromate/UM16368/readings"
+        response = requests.get(url)
+        if response.status_code != 200:
+            print(f"Failed to fetch UM16368 data: {response.status_code} {response.text}")
+            log_alert_event("ERROR", f"Failed to fetch UM16368 data: {response.status_code} {response.text}", 'Instantel 2')
+            result_summary['error'] = f"Failed to fetch UM16368 data: {response.status_code}"
+            return result_summary
+
+        data = response.json()
+        um16368_readings = data.get('UM16368Readings', [])
+        
+        if not um16368_readings:
+            print("No UM16368 data received")
+            log_alert_event("ERROR", "No UM16368 data received", 'Instantel 2')
+            result_summary['error'] = "No UM16368 data received"
+            return result_summary
+
+        print(f"Received {len(um16368_readings)} UM16368 data points")
+
+        # 4. Check thresholds for readings within the time window
+        # Filter readings within the specified time window (accounting for instrument time offset)
+        alerts_by_timestamp = {}
+        
+        # Convert time window to UTC for comparison
+        start_utc = start_instrument_time.astimezone(timezone.utc)
+        now_utc = now_instrument_time.astimezone(timezone.utc)
+        
+        readings_in_window = []
+        for reading in um16368_readings:
+            try:
+                timestamp_str = reading['Time']
+                # Parse timestamp - format is "2025-10-27 14:27:45" (no timezone, assume EST)
+                # Convert to datetime object
+                dt_naive = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                # Assume it's in EST and convert to UTC
+                dt_est = est_tz.localize(dt_naive)
+                dt_utc = dt_est.astimezone(timezone.utc)
+                
+                # Check if reading is within the time window
+                if start_utc <= dt_utc <= now_utc:
+                    readings_in_window.append(reading)
+                    
+            except Exception as e:
+                print(f"Failed to parse timestamp: {e}")
+                continue
+        
+        if not readings_in_window:
+            print(f"No UM16368 readings found in time window ({start_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} EST)")
+            log_alert_event("INFO", f"No UM16368 readings found in time window ({start_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} EST)", 'Instantel 2')
+            return result_summary
+        
+        print(f"Found {len(readings_in_window)} readings in time window")
+        
+        # Check thresholds for all readings in the time window
+        result_summary['total_readings_checked'] = len(readings_in_window)
+        
+        for reading in readings_in_window:
+            timestamp_str = reading['Time']
+            # Map: Longitudinal_PPV -> X-axis, Transverse_PPV -> Y-axis, Vertical_PPV -> Z-axis
+            x_axis = abs(float(reading.get('Longitudinal_PPV', 0)))
+            y_axis = abs(float(reading.get('Transverse_PPV', 0)))
+            z_axis = abs(float(reading.get('Vertical_PPV', 0)))
+            
+            # Check if we've already sent for this timestamp (unless force_resend is True)
+            if not force_resend:
+                already_sent = supabase.table('sent_alerts') \
+                    .select('id') \
+                    .eq('instrument_id', 'Instantel 2') \
+                    .eq('node_id', 24252) \
+                    .eq('timestamp', timestamp_str) \
+                    .execute()
+                if already_sent.data:
+                    print(f"Instantel 2 alert already sent for timestamp {timestamp_str}, skipping.")
+                    result_summary['readings_already_sent'] += 1
+                    result_summary['skipped_timestamps'].append(timestamp_str)
+                    continue
+            else:
+                print(f"Force resend enabled - checking timestamp {timestamp_str} even if already sent")
+
+            messages = []
+            
+            # Check shutdown thresholds
+            for axis, value, axis_desc in [('X', x_axis, 'X-axis (Longitudinal)'), ('Y', y_axis, 'Y-axis (Transverse)'), ('Z', z_axis, 'Z-axis (Vertical)')]:
+                if shutdown_value and value >= shutdown_value:
+                    messages.append(f"<b>Shutdown threshold reached on {axis_desc}:</b> {value:.6f}")
+            
+            # Check warning thresholds
+            for axis, value, axis_desc in [('X', x_axis, 'X-axis (Longitudinal)'), ('Y', y_axis, 'Y-axis (Transverse)'), ('Z', z_axis, 'Z-axis (Vertical)')]:
+                if warning_value and value >= warning_value:
+                    messages.append(f"<b>Warning threshold reached on {axis_desc}:</b> {value:.6f}")
+            
+            # Check alert thresholds
+            for axis, value, axis_desc in [('X', x_axis, 'X-axis (Longitudinal)'), ('Y', y_axis, 'Y-axis (Transverse)'), ('Z', z_axis, 'Z-axis (Vertical)')]:
+                if alert_value and value >= alert_value:
+                    messages.append(f"<b>Alert threshold reached on {axis_desc}:</b> {value:.6f}")
+
+            if messages:
+                result_summary['readings_with_alerts'] += 1
+                result_summary['alert_timestamps'].append(timestamp_str)
+                alerts_by_timestamp[timestamp_str] = {
+                    'messages': messages,
+                    'timestamp': timestamp_str,
+                    'values': {
+                        'X': x_axis, 
+                        'Y': y_axis, 
+                        'Z': z_axis
+                    }
+                }
+
+        # 6. Send email if there are alerts
+        if alerts_by_timestamp:
+            # Get project information and instrument details for Instantel 2 from database
+            project_name = "Lincoln Lewis Fairfax"  # Default fallback
+            instrument_details = []
+            
+            try:
+                instrument_info = get_project_info('Instantel 2')
+                if instrument_info:
+                    instrument_details.append(instrument_info)
+                    project_name = instrument_info['project_name']
+            except Exception as e:
+                print(f"Error getting project info for Instantel 2: {e}")
+                log_alert_event("ERROR", f"Error getting project info for Instantel 2: {e}", 'Instantel 2')
+                
+            body = _create_instantel2_email_body(alerts_by_timestamp, project_name, instrument_details)
+            
+            current_time = datetime.now(timezone.utc)
+            est_tz = pytz.timezone('US/Eastern')
+            current_time_est = current_time.astimezone(est_tz)
+            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            subject = f"📊 Instantel 2 (UM16368) Alert Notification - {formatted_time}"
+            
+            all_emails = set(alert_emails + warning_emails + shutdown_emails)
+            if all_emails:
+                email_sent = send_email(",".join(all_emails), subject, body)
+                if email_sent:
+                    result_summary['emails_sent'] = 1
+                    print(f"Sent Instantel 2 alert email for {len(alerts_by_timestamp)} timestamps with alerts to {len(all_emails)} recipients")
+                    log_alert_event("EMAIL_SENT", f"Alert email sent successfully to {len(all_emails)} recipients for {len(alerts_by_timestamp)} timestamps", 'Instantel 2')
+                    
+                    # Record that we've sent for each timestamp (only if not force_resend, to avoid duplicates)
+                    if not force_resend:
+                        for timestamp, alert_data in alerts_by_timestamp.items():
+                            # Determine the highest priority alert type
+                            alert_type = _determine_alert_type(alert_data['messages'])
+                            
+                            sent_alert_resp = supabase.table('sent_alerts').insert({
+                                'instrument_id': 'Instantel 2',
+                                'node_id': 24252,  # Using same node_id as Instantel 1, adjust if needed
+                                'timestamp': alert_data['timestamp'],
+                                'alert_type': alert_type
+                            }).execute()
+                            if sent_alert_resp.data:
+                                alert_id = sent_alert_resp.data[0]['id']
+                                log_alert_event("ALERT_RECORDED", f"Alert recorded in sent_alerts table with ID {alert_id} for timestamp {timestamp}", 'Instantel 2', alert_id)
+                    else:
+                        print(f"Force resend mode: Skipping sent_alerts table insertion to avoid duplicates")
+                        log_alert_event("INFO", f"Force resend mode: Sent {len(alerts_by_timestamp)} alerts without recording in sent_alerts table", 'Instantel 2')
+                else:
+                    log_alert_event("SEND EMAIL_FAILED", f"Failed to send alert email for Instantel 2", 'Instantel 2')
+            else:
+                print("No alert/warning/shutdown emails configured for Instantel 2")
+                log_alert_event("ERROR", "No alert/warning/shutdown emails configured for Instantel 2", 'Instantel 2')
+        else:
+            print("No thresholds crossed for any reading in the time window for Instantel 2.")
+            log_alert_event("INFO", f"No thresholds crossed for any reading in the time window. Checked {len(readings_in_window)} readings.", 'Instantel 2')
+        
+        return result_summary
+    except Exception as e:
+        print(f"Error in check_and_send_instantel2_alert: {e}")
+        log_alert_event("ERROR", f"Error in check_and_send_instantel2_alert: {e}", 'Instantel 2')
+        result_summary['error'] = str(e)
+        return result_summary
+
+def _create_instantel2_email_body(alerts_by_timestamp, project_name, instrument_details):
+    """Create HTML email body for Instantel 2 (UM16368) alerts"""
+    body = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }}
+            .container {{ max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }}
+            .header {{ background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 20px; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 24px; font-weight: bold; }}
+            .header p {{ margin: 5px 0 0 0; opacity: 0.9; }}
+            .content {{ padding: 30px; }}
+            .alert-section {{ margin-bottom: 25px; }}
+            .alert-section h3 {{ color: #0056d2; border-bottom: 2px solid #0056d2; padding-bottom: 10px; margin-bottom: 15px; }}
+            .alert-item {{ background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 10px; border-radius: 4px; }}
+            .alert-item.warning {{ border-left-color: #ffc107; }}
+            .alert-item.alert {{ border-left-color: #fd7e14; }}
+            .alert-item.shutdown {{ border-left-color: #dc3545; }}
+            .timestamp {{ font-weight: bold; color: #495057; margin-bottom: 10px; }}
+            .alert-message {{ color: #212529; line-height: 1.5; }}
+            .max-values {{ background-color: #e9ecef; padding: 10px; border-radius: 4px; margin-top: 10px; }}
+            .max-values table {{ width: 100%; border-collapse: collapse; }}
+            .max-values th, .max-values td {{ padding: 8px; text-align: center; border: 1px solid #dee2e6; }}
+            .max-values th {{ background-color: #f8f9fa; font-weight: bold; }}
+            .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }}
+            .footer p {{ margin: 0; }}
+            .company-info {{ font-weight: bold; color: #0056d2; }}
+            .project-info {{ background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .project-info p {{ margin: 0; color: #0056d2; font-weight: bold; }}
+            .instrument-info {{ background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 15px; margin-bottom: 20px; }}
+            .instrument-info h4 {{ margin: 0 0 10px 0; color: #0056d2; }}
+            .instrument-info table {{ width: 100%; border-collapse: collapse; }}
+            .instrument-info th, .instrument-info td {{ padding: 8px; text-align: left; border: 1px solid #dee2e6; }}
+            .instrument-info th {{ background-color: #e9ecef; font-weight: bold; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>📊 INSTANTEL 2 (UM16368) ALERT NOTIFICATION</h1>
+                <p>Dulles Geotechnical Monitoring System - {project_name}</p>
+            </div>
+            
+            <div class="content">
+                <div class="project-info">
+                    <p>📋 Project: {project_name}</p>
+                </div>
+                
+                <div class="instrument-info">
+                    <h4>📊 Instrument Details</h4>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Instrument ID</th>
+                                <th>Instrument Name</th>
+                                <th>Serial Number</th>
+                                <th>Location</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+    """
+    
+    # Add instrument details
+    for instrument in instrument_details:
+        body += f"""
+                            <tr>
+                                <td>{instrument['instrument_id']}</td>
+                                <td>{instrument['instrument_name']}</td>
+                                <td>{instrument['serial_number']}</td>
+                                <td>{instrument['instrument_location']}</td>
+                            </tr>
+        """
+    
+    body += f"""
+                        </tbody>
+                    </table>
+                </div>
+                
+                <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
+                    This is an automated alert notification from the DGMTS monitoring system. 
+                    The following Instantel 2 (UM16368) thresholds have been exceeded in real-time:
+                </p>
+    """
+    
+    # Add alerts for each timestamp
+    for timestamp, alert_data in alerts_by_timestamp.items():
+        # Format timestamp to EST
+        try:
+            dt_naive = datetime.strptime(alert_data['timestamp'], '%Y-%m-%d %H:%M:%S')
+            est_tz = pytz.timezone('US/Eastern')
+            dt_est = est_tz.localize(dt_naive)
+            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
+        except Exception as e:
+            print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
+            formatted_time = alert_data['timestamp']
+        
+        body += f"""
+                <div class="alert-section">
+                    <h3>📊 Real-time Alert - Instantel 2 (UM16368)</h3>
+        """
+        
+        for message in alert_data['messages']:
+            # Determine alert type for styling
+            alert_class = "alert-item"
+            if "Shutdown" in message:
+                alert_class += " shutdown"
+            elif "Warning" in message:
+                alert_class += " warning"
+            elif "Alert" in message:
+                alert_class += " alert"
+            
+            body += f"""
+                    <div class="{alert_class}">
+                        <div class="timestamp">{formatted_time}</div>
+                        <div class="alert-message">{message}</div>
+                        <div class="max-values">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Axis</th>
+                                        <th>Peak Value</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                           <tr>
+                                               <td>X-axis (Longitudinal)</td>
+                                               <td>{alert_data['values']['X']:.6f}</td>
+                                           </tr>
+                                           <tr>
+                                               <td>Y-axis (Transverse)</td>
+                                               <td>{alert_data['values']['Y']:.6f}</td>
+                                           </tr>
+                                           <tr>
+                                               <td>Z-axis (Vertical)</td>
+                                               <td>{alert_data['values']['Z']:.6f}</td>
+                                           </tr>
+                                </tbody>
+                            </table>
+                            <p style="margin: 10px 0 0 0; font-size: 12px; color: #6c757d;">
+                                Real-time reading that exceeded thresholds
+                            </p>
+                        </div>
+                    </div>
+            """
+        
+        body += """
+                </div>
+        """
+    
+    body += """
+                <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
+                    <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
+                    <p style="margin: 5px 0 0 0; color: #495057;">
+                        Please review the Instantel 2 (UM16368) data and take appropriate action if necessary. 
+                        Values shown are the actual readings that exceeded thresholds.
+                        <br><br>
+                        <strong>Project ID:</strong> 24252<br>
+                        <strong>Instrument:</strong> Instantel 2 (UM16368)
+                    </p>
+                </div>
+            </div>
+            
+            <div class="footer">
+                <p><span class="company-info">Dulles Geotechnical</span> | Instrumentation Monitoring System</p>
+                <p style="font-size: 12px; margin-top: 5px;">
+                    This is an automated message. Please do not reply to this email.
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return body
 
 def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_details):
     """Create HTML email body for Micromate alerts"""
