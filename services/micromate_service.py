@@ -26,7 +26,16 @@ def _determine_alert_type(messages):
     return "any"
 
 def log_alert_event(log_type, log_text, instrument_id, log_reference_alert=None):
-    """Log alert events to sent_alert_logs table"""
+    """Log alert events to sent_alert_logs table
+    
+    Note: INFO logs are skipped for Instantel 1 and Instantel 2 to reduce noise.
+    Only ERROR, EMAIL_SENT, ALERT_RECORDED, and other important log types are recorded.
+    """
+    # Skip INFO logs for Instantel instruments
+    if log_type == "INFO" and instrument_id in ["Instantel 1", "Instantel 2"]:
+        print(f"Skipped INFO log for {instrument_id}: {log_text}")
+        return
+    
     try:
         log_data = {
             'log_type': log_type,
