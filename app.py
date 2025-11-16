@@ -36,40 +36,104 @@ def index():
         "version": "2.0.0"
     })
 
-# Test endpoint for sending missed Rock Seismograph alerts
+# Endpoint for sending missed Rock Seismograph alerts
 @app.route('/send-missed-rock-seismograph-alerts', methods=['POST'])
 def send_missed_alerts():
-    """Send emails for missed Rock Seismograph alerts by checking historical data"""
+    """
+    Send emails for missed Rock Seismograph alerts by checking historical data.
+    
+    Accepts:
+    - emails: List of email addresses or comma-separated string (optional, uses configured emails if not provided)
+    - instrument_id: Instrument ID (default: 'ROCKSMG-1')
+    - days_back: Number of days to search back (default: 3)
+    
+    Example POST body:
+    {
+        "emails": ["email1@example.com", "email2@example.com"],
+        "instrument_id": "ROCKSMG-1",
+        "days_back": 5
+    }
+    """
     try:
         from send_missed_rock_seismograph_alerts import send_missed_rock_seismograph_alerts
         
         data = request.get_json() or {}
         instrument_id = data.get('instrument_id', 'ROCKSMG-1')
-        days_back = data.get('days_back', 30)
+        days_back = data.get('days_back', 3)  # Default to 3 days as requested
+        emails = data.get('emails', [])  # Accept emails parameter
+        
+        # Handle emails - can be list, comma-separated string, or single string
+        custom_emails = None
+        if emails:
+            if isinstance(emails, str):
+                # Handle comma-separated string
+                custom_emails = [email.strip() for email in emails.split(',') if email.strip()]
+            elif isinstance(emails, list):
+                # Handle list of emails
+                custom_emails = [email.strip() if isinstance(email, str) else str(email) for email in emails if email]
+            else:
+                custom_emails = [str(emails)]
         
         print(f"🚀 Starting missed alerts check for {instrument_id} (last {days_back} days)")
+        if custom_emails:
+            print(f"📧 Sending to custom emails: {custom_emails}")
         
-        success = send_missed_rock_seismograph_alerts(instrument_id, days_back)
+        # Import traceback for better error reporting
+        import traceback
         
-        if success:
-            return jsonify({
-                "message": f"✅ Missed alerts check completed for {instrument_id}",
-                "instrument_id": instrument_id,
-                "days_back": days_back,
-                "status": "success"
-            }), 200
-        else:
+        try:
+            result = send_missed_rock_seismograph_alerts(instrument_id, days_back, custom_emails=custom_emails)
+            
+            # Handle both old format (bool) and new format (tuple)
+            if isinstance(result, tuple):
+                success, error_message = result
+            else:
+                # Backward compatibility with old return format
+                success = result
+                error_message = None
+            
+            if success:
+                return jsonify({
+                    "message": f"✅ Missed alerts check completed for {instrument_id}",
+                    "instrument_id": instrument_id,
+                    "days_back": days_back,
+                    "emails_used": custom_emails if custom_emails else "configured emails",
+                    "status": "success"
+                }), 200
+            else:
+                # If function returned False, there was an error but it was caught internally
+                return jsonify({
+                    "error": f"❌ Failed to process missed alerts for {instrument_id}",
+                    "instrument_id": instrument_id,
+                    "days_back": days_back,
+                    "emails_used": custom_emails if custom_emails else "configured emails",
+                    "status": "failed",
+                    "error_message": error_message or "Unknown error - check server logs for details",
+                    "hint": "Common issues: Missing instrument config, missing syscom_device_id, API key not set, or no data available"
+                }), 500
+        except Exception as func_error:
+            # If the function itself raised an exception
+            error_trace = traceback.format_exc()
+            print(f"❌ Exception in send_missed_rock_seismograph_alerts: {error_trace}")
             return jsonify({
                 "error": f"❌ Failed to process missed alerts for {instrument_id}",
                 "instrument_id": instrument_id,
                 "days_back": days_back,
-                "status": "failed"
+                "emails_used": custom_emails if custom_emails else "configured emails",
+                "status": "failed",
+                "error_message": str(func_error),
+                "error_type": type(func_error).__name__
             }), 500
             
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ Exception in endpoint: {error_trace}")
         return jsonify({
             "error": "Failed to process missed Rock Seismograph alerts",
-            "message": str(e)
+            "message": str(e),
+            "error_type": type(e).__name__,
+            "traceback": error_trace
         }), 500
 
 # Test endpoint for sending Rock Seismograph test email to specific address
@@ -98,7 +162,14 @@ def test_rock_seismograph_email():
         print(f"🧪 Sending missed alerts for {instrument_id} to {emails_to_use} (last {days_back} days)")
         
         # Run the missed alerts function with custom emails
-        success = send_missed_rock_seismograph_alerts(instrument_id, days_back, custom_emails=emails_to_use)
+        result = send_missed_rock_seismograph_alerts(instrument_id, days_back, custom_emails=emails_to_use)
+        
+        # Handle both old format (bool) and new format (tuple)
+        if isinstance(result, tuple):
+            success, error_message = result
+        else:
+            success = result
+            error_message = None
         
         if success:
             return jsonify({
@@ -121,6 +192,106 @@ def test_rock_seismograph_email():
         return jsonify({
             "error": "Failed to send missed Rock Seismograph alerts to test email",
             "message": str(e)
+        }), 500
+
+# Endpoint for sending missed SMG-1 Seismograph alerts
+@app.route('/send-missed-smg1-alerts', methods=['POST'])
+def send_missed_smg1_alerts_endpoint():
+    """
+    Send emails for missed SMG-1 Seismograph alerts by checking historical data.
+    
+    Accepts:
+    - emails: List of email addresses or comma-separated string (optional, uses configured emails if not provided)
+    - instrument_id: Instrument ID (default: 'SMG-1')
+    - days_back: Number of days to search back (default: 3)
+    
+    Example POST body:
+    {
+        "emails": ["email1@example.com", "email2@example.com"],
+        "instrument_id": "SMG-1",
+        "days_back": 5
+    }
+    """
+    try:
+        from send_missed_smg1_alerts import send_missed_smg1_alerts as send_missed_alerts_func
+        
+        data = request.get_json() or {}
+        instrument_id = data.get('instrument_id', 'SMG-1')
+        days_back = data.get('days_back', 3)  # Default to 3 days as requested
+        emails = data.get('emails', [])  # Accept emails parameter
+        
+        # Handle emails - can be list, comma-separated string, or single string
+        custom_emails = None
+        if emails:
+            if isinstance(emails, str):
+                # Handle comma-separated string
+                custom_emails = [email.strip() for email in emails.split(',') if email.strip()]
+            elif isinstance(emails, list):
+                # Handle list of emails
+                custom_emails = [email.strip() if isinstance(email, str) else str(email) for email in emails if email]
+            else:
+                custom_emails = [str(emails)]
+        
+        print(f"🚀 Starting missed alerts check for {instrument_id} (last {days_back} days)")
+        if custom_emails:
+            print(f"📧 Sending to custom emails: {custom_emails}")
+        
+        # Import traceback for better error reporting
+        import traceback
+        
+        try:
+            result = send_missed_alerts_func(instrument_id, days_back, custom_emails=custom_emails)
+            
+            # Handle both old format (bool) and new format (tuple)
+            if isinstance(result, tuple):
+                success, error_message = result
+            else:
+                # Backward compatibility with old return format
+                success = result
+                error_message = None
+            
+            if success:
+                return jsonify({
+                    "message": f"✅ Missed alerts check completed for {instrument_id}",
+                    "instrument_id": instrument_id,
+                    "days_back": days_back,
+                    "emails_used": custom_emails if custom_emails else "configured emails",
+                    "status": "success"
+                }), 200
+            else:
+                # If function returned False, there was an error but it was caught internally
+                return jsonify({
+                    "error": f"❌ Failed to process missed alerts for {instrument_id}",
+                    "instrument_id": instrument_id,
+                    "days_back": days_back,
+                    "emails_used": custom_emails if custom_emails else "configured emails",
+                    "status": "failed",
+                    "error_message": error_message or "Unknown error - check server logs for details",
+                    "hint": "Common issues: Missing instrument config, missing device_id, API key not set, or no data available"
+                }), 500
+        except Exception as func_error:
+            # If the function itself raised an exception
+            error_trace = traceback.format_exc()
+            print(f"❌ Exception in send_missed_smg1_alerts: {error_trace}")
+            return jsonify({
+                "error": f"❌ Failed to process missed alerts for {instrument_id}",
+                "instrument_id": instrument_id,
+                "days_back": days_back,
+                "emails_used": custom_emails if custom_emails else "configured emails",
+                "status": "failed",
+                "error_message": str(func_error),
+                "error_type": type(func_error).__name__
+            }), 500
+            
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ Exception in endpoint: {error_trace}")
+        return jsonify({
+            "error": "Failed to process missed SMG-1 Seismograph alerts",
+            "message": str(e),
+            "error_type": type(e).__name__,
+            "traceback": error_trace
         }), 500
 
 # Start scheduler when the module is imported

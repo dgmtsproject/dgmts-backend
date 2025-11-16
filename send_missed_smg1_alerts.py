@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Function to send missed Rock Seismograph alert emails by fetching historical data.
+Function to send missed SMG-1 Seismograph alert emails by fetching historical data.
 This will check past data and send emails for any missed threshold violations.
 """
 
@@ -13,18 +13,18 @@ import pytz
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from services.rock_seismograph_service import _create_rock_seismograph_email_body, get_project_info, log_alert_event
+from services.alert_service import _create_seismograph_email_body, get_project_info
 from services.email_service import send_email
 from supabase import create_client
 from config import Config
 
-def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30, custom_emails=None):
+def send_missed_smg1_alerts(instrument_id='SMG-1', days_back=3, custom_emails=None):
     """
-    Fetch historical data and send emails for missed Rock Seismograph alerts.
+    Fetch historical data and send emails for missed SMG-1 Seismograph alerts.
     
     Args:
-        instrument_id (str): The instrument ID to check (ROCKSMG-1 or ROCKSMG-2)
-        days_back (int): How many days back to check for missed alerts
+        instrument_id (str): The instrument ID to check (default: 'SMG-1')
+        days_back (int): How many days back to check for missed alerts (default: 3)
         custom_emails (list): Optional list of custom email addresses to send to instead of configured ones
     
     Returns:
@@ -34,8 +34,8 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
     try:
         days_back = int(days_back)
     except (ValueError, TypeError):
-        print(f"⚠️ Invalid days_back value: {days_back}, using default 30")
-        days_back = 30
+        print(f"⚠️ Invalid days_back value: {days_back}, using default 3")
+        days_back = 3
     
     print(f"🔍 Checking missed alerts for {instrument_id} (last {days_back} days)...")
     
@@ -83,12 +83,9 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
                 print(f"❌ {error_msg}")
                 return False, error_msg
         
-        # Get device ID
-        device_id = instrument.get('syscom_device_id')
-        if not device_id:
-            error_msg = f"No syscom_device_id found for {instrument_id}. Please configure the device ID in the instruments table."
-            print(f"❌ {error_msg}")
-            return False, error_msg
+        # SMG-1 uses device_id 15092 (hardcoded in the original function)
+        device_id = 15092
+        node_id = 15092  # Used in sent_alerts table
         
         print(f"📡 Using device_id: {device_id}")
         print(f"📬 Recipients: {list(all_emails)}")
@@ -96,13 +93,15 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
         # Calculate time range
         est = pytz.timezone('US/Eastern')
         now_est = datetime.now(est)
-        start_date = now_est - timedelta(days=days_back)
+        # Account for instrument clock being 1 hour behind EST
+        now_instrument_time = now_est - timedelta(hours=1)
+        start_date = now_instrument_time - timedelta(days=days_back)
         
-        # Format dates for API
+        # Format dates for API (using instrument time which is 1 hour behind EST)
         start_time = start_date.strftime('%Y-%m-%dT%H:%M:%S')
-        end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
+        end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
         
-        print(f"📅 Checking data from {start_time} to {end_time} EST")
+        print(f"📅 Checking data from {start_time} to {end_time} EST (instrument time)")
         
         # Fetch historical data from Syscom API
         api_key = os.environ.get('SYSCOM_API_KEY')
@@ -118,10 +117,15 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
         print(f"   URL: {url}")
         response = requests.get(url, headers=headers)
         
-        if response.status_code != 200:
+        if response.status_code not in [200, 204]:
             error_msg = f"Failed to fetch data from Syscom API: HTTP {response.status_code} - {response.text[:200]}"
             print(f"❌ {error_msg}")
             return False, error_msg
+        
+        # Handle 204 No Content response
+        if response.status_code == 204:
+            print(f"📊 No historical data found for {instrument_id} in the last {days_back} days")
+            return True, None
         
         data = response.json()
         background_data = data.get('data', [])
@@ -136,9 +140,9 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
         hourly_data = {}
         for entry in background_data:
             timestamp = entry[0]
-            x_value = float(entry[1])
-            y_value = float(entry[2])
-            z_value = float(entry[3])
+            x_value = abs(float(entry[1]))
+            y_value = abs(float(entry[2]))
+            z_value = abs(float(entry[3]))
             
             # Extract hour key (YYYY-MM-DD-HH)
             try:
@@ -151,15 +155,15 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
             
             if hour_key not in hourly_data:
                 hourly_data[hour_key] = {
-                    'max_x': abs(x_value),
-                    'max_y': abs(y_value),
-                    'max_z': abs(z_value),
+                    'max_x': x_value,
+                    'max_y': y_value,
+                    'max_z': z_value,
                     'timestamp': timestamp
                 }
             else:
-                hourly_data[hour_key]['max_x'] = max(hourly_data[hour_key]['max_x'], abs(x_value))
-                hourly_data[hour_key]['max_y'] = max(hourly_data[hour_key]['max_y'], abs(y_value))
-                hourly_data[hour_key]['max_z'] = max(hourly_data[hour_key]['max_z'], abs(z_value))
+                hourly_data[hour_key]['max_x'] = max(hourly_data[hour_key]['max_x'], x_value)
+                hourly_data[hour_key]['max_y'] = max(hourly_data[hour_key]['max_y'], y_value)
+                hourly_data[hour_key]['max_z'] = max(hourly_data[hour_key]['max_z'], z_value)
         
         print(f"📊 Grouped into {len(hourly_data)} hours")
         
@@ -173,16 +177,16 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
             max_z = hour_data['max_z']
             timestamp = hour_data['timestamp']
             
-            # Check if we've already sent for this hour (any alert type)
+            # Check if we've already sent for this timestamp
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
                 .eq('instrument_id', instrument_id) \
-                .eq('node_id', device_id) \
+                .eq('node_id', node_id) \
                 .eq('timestamp', timestamp) \
                 .execute()
             
             if already_sent.data:
-                continue  # Skip if already sent for this hour
+                continue  # Skip if already sent for this timestamp
             
             # Check shutdown thresholds - send separate email for each
             for axis, value in [('X', max_x), ('Y', max_y), ('Z', max_z)]:
@@ -237,8 +241,8 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
             return False, error_msg
         
         instrument_details = [instrument_info]
-        project_name = instrument_info['project_name']
-        seismograph_name = "Rock Seismograph"
+        project_name = instrument_info.get('project_name', 'ANC DAR BC')  # Default fallback
+        seismograph_name = "Seismograph"
         
         # Track which hours we've already recorded in sent_alerts
         recorded_hours = set()
@@ -256,18 +260,17 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
             # Create email body for this specific alert
             # The email function expects 'values' not 'max_values'
             single_alert_data = {
-                hour_key: {
+                timestamp: {
                     'messages': [alert['message']],
                     'timestamp': timestamp,
                     'values': alert['max_values']  # Use 'values' key as expected by email function
                 }
             }
             
-            body = _create_rock_seismograph_email_body(
+            body = _create_seismograph_email_body(
                 single_alert_data, 
                 seismograph_name, 
                 project_name, 
-                instrument_id, 
                 instrument_details
             )
             
@@ -288,23 +291,23 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
                 print(f"✅ {alert_type.upper()} email sent for {hour_key} - {axis}-axis")
                 emails_sent += 1
                 
-                # Record that we've sent for this hour (only insert once per hour)
-                if hour_key not in recorded_hours:
+                # Record that we've sent for this timestamp (only insert once per timestamp)
+                if timestamp not in recorded_hours:
                     try:
                         sent_alert_resp = supabase.table('sent_alerts').insert({
                             'instrument_id': instrument_id,
-                            'node_id': device_id,
+                            'node_id': node_id,
                             'timestamp': timestamp,
-                            'alert_type': 'any'  # Use generic type to avoid duplicates
+                            'alert_type': alert_type
                         }).execute()
                         
                         if sent_alert_resp.data:
                             alert_id = sent_alert_resp.data[0]['id']
-                            recorded_hours.add(hour_key)
+                            recorded_hours.add(timestamp)
                     except Exception as insert_error:
                         # If duplicate key error, just log that it was already recorded
                         if "duplicate key" in str(insert_error).lower() or "23505" in str(insert_error):
-                            recorded_hours.add(hour_key)
+                            recorded_hours.add(timestamp)
                         else:
                             print(f"⚠️ Failed to record alert in database: {insert_error}")
                 
@@ -325,31 +328,18 @@ def send_missed_rock_seismograph_alerts(instrument_id='ROCKSMG-1', days_back=30,
 
 def main():
     """Main function to run the missed alerts check"""
-    print("🌊 Rock Seismograph Missed Alerts Sender")
+    print("🌊 SMG-1 Seismograph Missed Alerts Sender")
     print("=" * 50)
     
-    # Check both instruments
-    instruments = ['ROCKSMG-1', 'ROCKSMG-2']
-    
-    for instrument_id in instruments:
-        print(f"\n🎯 Checking {instrument_id}...")
-        result = send_missed_rock_seismograph_alerts(instrument_id, days_back=30)
-        # Handle both tuple and bool return formats
-        if isinstance(result, tuple):
-            success, error_message = result
-            if error_message:
-                print(f"   Error: {error_message}")
-        else:
-            success = result
-        
-        if success:
-            print(f"✅ {instrument_id} check completed")
-        else:
-            print(f"❌ {instrument_id} check failed")
-        print("-" * 30)
+    success, error = send_missed_smg1_alerts('SMG-1', days_back=3)
+    if success:
+        print(f"✅ SMG-1 check completed")
+    else:
+        print(f"❌ SMG-1 check failed: {error}")
     
     print("\n🏁 Missed alerts check completed!")
 
 
 if __name__ == "__main__":
     main()
+

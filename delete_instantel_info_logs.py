@@ -18,6 +18,42 @@ from config import Config
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
+def fetch_all_info_logs(instrument_id, batch_size=1000):
+    """Fetch all INFO logs for an instrument using pagination"""
+    all_logs = []
+    offset = 0
+    
+    while True:
+        try:
+            response = supabase.table('sent_alert_logs') \
+                .select('id, log_type, log, log_time, for_instrument') \
+                .eq('for_instrument', instrument_id) \
+                .eq('log_type', 'INFO') \
+                .range(offset, offset + batch_size - 1) \
+                .execute()
+            
+            batch = response.data
+            if not batch:
+                break
+            
+            all_logs.extend(batch)
+            
+            # If we got fewer records than batch_size, we've reached the end
+            if len(batch) < batch_size:
+                break
+            
+            offset += batch_size
+            
+            # Progress indicator
+            if offset % 5000 == 0:
+                print(f"    Fetched {len(all_logs)} records so far...")
+                
+        except Exception as e:
+            print(f"    ⚠️  Error fetching batch at offset {offset}: {e}")
+            break
+    
+    return all_logs
+
 def delete_instantel_info_logs(dry_run=False):
     """Delete INFO log records for Instantel 1 and Instantel 2"""
     
@@ -35,14 +71,9 @@ def delete_instantel_info_logs(dry_run=False):
         print(f"\n📊 Processing {instrument_id}...")
         
         try:
-            # Fetch all INFO logs for this instrument
-            response = supabase.table('sent_alert_logs') \
-                .select('id, log_type, log, log_time, for_instrument') \
-                .eq('for_instrument', instrument_id) \
-                .eq('log_type', 'INFO') \
-                .execute()
-            
-            logs = response.data
+            # Fetch all INFO logs for this instrument using pagination
+            print(f"  Fetching all INFO logs (this may take a moment)...")
+            logs = fetch_all_info_logs(instrument_id)
             print(f"  Found {len(logs)} INFO log records for {instrument_id}")
             
             if not logs:
@@ -57,31 +88,63 @@ def delete_instantel_info_logs(dry_run=False):
                 print(f"    ... and {len(logs) - 5} more")
             
             if not dry_run:
-                # Delete each INFO log record
-                deleted_count = 0
-                for log in logs:
-                    try:
-                        delete_response = supabase.table('sent_alert_logs') \
-                            .delete() \
-                            .eq('id', log['id']) \
-                            .execute()
-                        
-                        if delete_response.data:
-                            deleted_count += 1
-                        else:
-                            print(f"    ⚠️  Failed to delete log ID {log['id']}")
-                            
-                    except Exception as e:
-                        print(f"    ⚠️  Error deleting log ID {log['id']}: {e}")
+                # Use direct filter-based deletion (most efficient)
+                # This deletes all records matching the filter in one operation
+                print(f"  Deleting {len(logs)} INFO log records...")
                 
-                print(f"  ✅ Deleted {deleted_count} INFO log records for {instrument_id}")
-                total_deleted += deleted_count
+                try:
+                    # Delete all INFO logs for this instrument using filters
+                    delete_response = supabase.table('sent_alert_logs') \
+                        .delete() \
+                        .eq('for_instrument', instrument_id) \
+                        .eq('log_type', 'INFO') \
+                        .execute()
+                    
+                    # Count deleted records
+                    deleted_count = len(delete_response.data) if delete_response.data else 0
+                    
+                    print(f"  ✅ Deleted {deleted_count} INFO log records for {instrument_id}")
+                    total_deleted += deleted_count
+                    
+                except Exception as e:
+                    print(f"  ⚠️  Error with bulk deletion: {e}")
+                    print(f"  Falling back to individual deletions...")
+                    
+                    # Fallback: delete one by one
+                    deleted_count = 0
+                    batch_size = 100
+                    total_batches = (len(logs) + batch_size - 1) // batch_size
+                    
+                    for batch_num in range(total_batches):
+                        start_idx = batch_num * batch_size
+                        end_idx = min(start_idx + batch_size, len(logs))
+                        batch = logs[start_idx:end_idx]
+                        
+                        for log in batch:
+                            try:
+                                delete_response = supabase.table('sent_alert_logs') \
+                                    .delete() \
+                                    .eq('id', log['id']) \
+                                    .execute()
+                                if delete_response.data:
+                                    deleted_count += 1
+                            except Exception as e2:
+                                print(f"      ⚠️  Failed to delete log ID {log['id']}: {e2}")
+                        
+                        # Progress indicator
+                        if (batch_num + 1) % 10 == 0 or batch_num == total_batches - 1:
+                            print(f"    Progress: {batch_num + 1}/{total_batches} batches ({deleted_count}/{len(logs)} deleted)")
+                    
+                    print(f"  ✅ Deleted {deleted_count} INFO log records for {instrument_id} (individual method)")
+                    total_deleted += deleted_count
             else:
                 print(f"  🔍 Would delete {len(logs)} INFO log records for {instrument_id}")
                 total_deleted += len(logs)
                 
         except Exception as e:
             print(f"  ❌ Error processing {instrument_id}: {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     print("\n" + "=" * 60)
