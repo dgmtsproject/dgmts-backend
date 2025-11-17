@@ -1068,6 +1068,9 @@ def get_um16368_readings():
                 vert_index = None
                 long_index = None
                 geophone_index = None
+                mic_lmax_index = None
+                mic_l10_index = None
+                mic_l90_index = None
                 
                 # Find the maximum column count across all rows
                 max_cols = max(len(format_row), len(header_row), len(column_row))
@@ -1145,6 +1148,51 @@ def get_um16368_readings():
                             if "in/s" in unit_val:
                                 geophone_index = i
                     
+                    # For Mic LMax: column_row should have "MIC" and format_row should have "LMAX", header_row should have "db(A)"
+                    if col_name_val == "MIC" and format_val == "LMAX":
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "db(a)" in unit_val and mic_lmax_index is None:
+                            mic_lmax_index = i
+                    elif col_name_val == "MIC" and mic_lmax_index is None:
+                        if format_val == "LMAX":
+                            unit_val = header_col.strip().lower() if header_col else ""
+                            if "db(a)" in unit_val:
+                                mic_lmax_index = i
+                        elif i + 1 < len(format_row) and format_row[i + 1].strip().upper() == "LMAX":
+                            unit_val = header_row[i + 1].strip().lower() if i + 1 < len(header_row) and header_row[i + 1] else ""
+                            if "db(a)" in unit_val:
+                                mic_lmax_index = i + 1
+                    
+                    # For Mic L10: column_row should have "MIC" and format_row should have "L10", header_row should have "db(A)"
+                    if col_name_val == "MIC" and format_val == "L10":
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "db(a)" in unit_val and mic_l10_index is None:
+                            mic_l10_index = i
+                    elif col_name_val == "MIC" and mic_l10_index is None:
+                        if format_val == "L10":
+                            unit_val = header_col.strip().lower() if header_col else ""
+                            if "db(a)" in unit_val:
+                                mic_l10_index = i
+                        elif i + 1 < len(format_row) and format_row[i + 1].strip().upper() == "L10":
+                            unit_val = header_row[i + 1].strip().lower() if i + 1 < len(header_row) and header_row[i + 1] else ""
+                            if "db(a)" in unit_val:
+                                mic_l10_index = i + 1
+                    
+                    # For Mic L90: column_row should have "MIC" and format_row should have "L90", header_row should have "db(A)"
+                    if col_name_val == "MIC" and format_val == "L90":
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "db(a)" in unit_val and mic_l90_index is None:
+                            mic_l90_index = i
+                    elif col_name_val == "MIC" and mic_l90_index is None:
+                        if format_val == "L90":
+                            unit_val = header_col.strip().lower() if header_col else ""
+                            if "db(a)" in unit_val:
+                                mic_l90_index = i
+                        elif i + 1 < len(format_row) and format_row[i + 1].strip().upper() == "L90":
+                            unit_val = header_row[i + 1].strip().lower() if i + 1 < len(header_row) and header_row[i + 1] else ""
+                            if "db(a)" in unit_val:
+                                mic_l90_index = i + 1
+                    
                     # Also check if column names appear in header_row (fallback, though less likely based on structure)
                     if header_col == "TRAN" and format_val == "PPV" and tran_index is None:
                         unit_val = header_col.strip().lower() if header_col else ""
@@ -1162,6 +1210,18 @@ def get_um16368_readings():
                         unit_val = header_col.strip().lower() if header_col else ""
                         if "in/s" in unit_val or not unit_val:
                             geophone_index = i
+                    elif header_col == "MIC" and format_val == "LMAX" and mic_lmax_index is None:
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "db(a)" in unit_val or not unit_val:
+                            mic_lmax_index = i
+                    elif header_col == "MIC" and format_val == "L10" and mic_l10_index is None:
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "db(a)" in unit_val or not unit_val:
+                            mic_l10_index = i
+                    elif header_col == "MIC" and format_val == "L90" and mic_l90_index is None:
+                        unit_val = header_col.strip().lower() if header_col else ""
+                        if "db(a)" in unit_val or not unit_val:
+                            mic_l90_index = i
                 
                 # Fallback: If we still haven't found columns, try to match PPV with "in/s" units directly
                 # This handles cases where column names might not be found but format and units match
@@ -1192,12 +1252,27 @@ def get_um16368_readings():
                         if format_val == "PVS" and "in/s" in unit_val:
                             geophone_index = i
                 
+                # Fallback for Mic: Find LMAX, L10, L90 with "db(A)"
+                if mic_lmax_index is None or mic_l10_index is None or mic_l90_index is None:
+                    for i in range(max_cols):
+                        if i == time_index:
+                            continue
+                        format_val = format_row[i].strip().upper() if i < len(format_row) and format_row[i] else ""
+                        unit_val = header_row[i].strip().lower() if i < len(header_row) and header_row[i] else ""
+                        if "db(a)" in unit_val:
+                            if format_val == "LMAX" and mic_lmax_index is None:
+                                mic_lmax_index = i
+                            elif format_val == "L10" and mic_l10_index is None:
+                                mic_l10_index = i
+                            elif format_val == "L90" and mic_l90_index is None:
+                                mic_l90_index = i
+                
                 # Debug: Print row contents and found indices
                 print(f"File {os.path.basename(file_path)}: PPV at row {ppv_row_idx + 1}, TIME at row {header_row_idx + 1}")
                 print(f"  Column row (row {format_row_idx - 1}): {column_row[:10] if len(column_row) > 10 else column_row}")
                 print(f"  Format row (row {format_row_idx}): {format_row[:10] if len(format_row) > 10 else format_row}")
                 print(f"  Header row (row {header_row_idx}): {header_row[:10] if len(header_row) > 10 else header_row}")
-                print(f"  Found indices - Tran: {tran_index}, Vert: {vert_index}, Long: {long_index}, Geophone: {geophone_index}")
+                print(f"  Found indices - Tran: {tran_index}, Vert: {vert_index}, Long: {long_index}, Geophone: {geophone_index}, Mic LMax: {mic_lmax_index}, Mic L10: {mic_l10_index}, Mic L90: {mic_l90_index}")
                 
                 # Process readings from row after header onwards
                 file_readings = []
@@ -1264,6 +1339,33 @@ def get_um16368_readings():
                                 reading[f'Geophone_{geophone_format}'] = float(geophone_value)
                             except ValueError:
                                 reading[f'Geophone_{geophone_format}'] = geophone_value
+                    
+                    # Add Mic LMax reading if available
+                    if mic_lmax_index is not None and mic_lmax_index < len(row):
+                        mic_lmax_value = row[mic_lmax_index].strip()
+                        if mic_lmax_value:
+                            try:
+                                reading['Mic_LMax_db(A)'] = float(mic_lmax_value)
+                            except ValueError:
+                                reading['Mic_LMax_db(A)'] = mic_lmax_value
+                    
+                    # Add Mic L10 reading if available
+                    if mic_l10_index is not None and mic_l10_index < len(row):
+                        mic_l10_value = row[mic_l10_index].strip()
+                        if mic_l10_value:
+                            try:
+                                reading['Mic_L10_db(A)'] = float(mic_l10_value)
+                            except ValueError:
+                                reading['Mic_L10_db(A)'] = mic_l10_value
+                    
+                    # Add Mic L90 reading if available
+                    if mic_l90_index is not None and mic_l90_index < len(row):
+                        mic_l90_value = row[mic_l90_index].strip()
+                        if mic_l90_value:
+                            try:
+                                reading['Mic_L90_db(A)'] = float(mic_l90_value)
+                            except ValueError:
+                                reading['Mic_L90_db(A)'] = mic_l90_value
                     
                     # Only add reading if it has at least one reading value (excluding Time and source_file)
                     if len(reading) > 2:  # More than just Time and source_file
