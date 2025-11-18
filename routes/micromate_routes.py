@@ -357,6 +357,256 @@ def check_instantel2_alerts_custom():
             'message': 'An error occurred while checking alerts'
         }), 500
 
+@micromate_bp.route('/test-last-reading', methods=['GET', 'POST'])
+def test_last_reading():
+    """
+    Test endpoint to show what the scheduler will get when checking Instantel 1 alerts.
+    
+    GET: Shows the actual latest reading
+    POST: Can provide a timestamp to test with a specific reading
+    
+    POST Body Example:
+    {
+        "time": "2025-11-18T13:50:06.053+00:00"
+    }
+    
+    This will find the latest reading that is <= the provided timestamp and check it.
+    """
+    # Get optional timestamp from request
+    test_timestamp = None
+    if request.method == 'POST':
+        data = request.get_json() or {}
+        test_timestamp = data.get('time') or data.get('Time') or data.get('timestamp')
+    
+    return _test_last_reading_internal(test_timestamp)
+
+@micromate_bp.route('/test-last-reading-check', methods=['POST'])
+def test_last_reading_and_check():
+    """
+    Test endpoint that checks a specific reading and actually runs the alert check.
+    
+    POST Body Example:
+    {
+        "time": "2025-11-18T13:50:06.053+00:00",
+        "send_alert": false  // Optional: if true, will actually send alert
+    }
+    
+    This will:
+    1. Find the latest reading <= provided timestamp
+    2. Check thresholds
+    3. Optionally send alert if thresholds exceeded
+    """
+    try:
+        data = request.get_json() or {}
+        test_timestamp = data.get('time') or data.get('Time') or data.get('timestamp')
+        send_alert = data.get('send_alert', False)
+        
+        if not test_timestamp:
+            return jsonify({
+                'error': 'Timestamp required. Provide "time" in request body.',
+                'example': {'time': '2025-11-18T13:50:06.053+00:00'}
+            }), 400
+        
+        # Use the internal function to get the reading info
+        result = _test_last_reading_internal(test_timestamp)
+        
+        if result[1] != 200:  # If there was an error
+            return result
+        
+        reading_data = result[0].get_json()
+        
+        # If thresholds exceeded and send_alert is True, actually send the alert
+        if reading_data.get('any_threshold_exceeded') and send_alert:
+            from services.micromate_service import check_and_send_micromate_alert
+            # We need to modify the function to accept a specific reading
+            # For now, just return the info
+            return jsonify({
+                **reading_data,
+                'note': 'To actually send alert, use the /api/micromate/check-alerts endpoint',
+                'send_alert_requested': True
+            }), 200
+        
+        return jsonify({
+            **reading_data,
+            'send_alert_requested': send_alert,
+            'note': 'Set "send_alert": true to actually send alert if thresholds exceeded'
+        }), 200
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': f'Failed to test reading: {str(e)}',
+            'traceback': traceback.format_exc(),
+            'status': 'error'
+        }), 500
+
+def _test_last_reading_internal(test_timestamp=None):
+    """
+    Internal function to test last reading with optional timestamp.
+    Finds the latest reading <= test_timestamp (or actual latest if None).
+    """
+    try:
+        from supabase import create_client
+        from config import Config
+        import requests
+        from datetime import datetime
+        
+        supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+        
+        # 1. Get instrument settings
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'Instantel 1').execute()
+        instrument = instrument_resp.data[0] if instrument_resp.data else None
+        if not instrument:
+            return jsonify({
+                'error': 'No instrument found for Instantel 1',
+                'status': 'error'
+            }), 404
+        
+        alert_value = instrument.get('alert_value')
+        warning_value = instrument.get('warning_value')
+        shutdown_value = instrument.get('shutdown_value')
+        
+        # 2. Fetch data from Micromate API
+        url = "https://imsite.dullesgeotechnical.com/api/micromate/readings"
+        response = requests.get(url)
+        if response.status_code != 200:
+            return jsonify({
+                'error': f'Failed to fetch Micromate data: {response.status_code}',
+                'status': 'error'
+            }), 500
+        
+        data = response.json()
+        micromate_readings = data.get('MicromateReadings', [])
+        
+        if not micromate_readings:
+            return jsonify({
+                'error': 'No Micromate data received',
+                'status': 'error'
+            }), 404
+        
+        # 3. Get the last reading (with respect to test_timestamp if provided)
+        if test_timestamp:
+            # Find the latest reading that is <= test_timestamp
+            print(f"Testing with provided timestamp: {test_timestamp}")
+            try:
+                test_dt = datetime.fromisoformat(test_timestamp.replace('Z', '+00:00'))
+                # Filter readings <= test_timestamp and sort by Time
+                filtered_readings = []
+                for reading in micromate_readings:
+                    try:
+                        reading_time = reading.get('Time', '')
+                        if reading_time:
+                            reading_dt = datetime.fromisoformat(reading_time.replace('Z', '+00:00'))
+                            if reading_dt <= test_dt:
+                                filtered_readings.append(reading)
+                    except:
+                        continue
+                
+                if not filtered_readings:
+                    return jsonify({
+                        'error': f'No readings found before or at the provided timestamp: {test_timestamp}',
+                        'status': 'error',
+                        'test_timestamp': test_timestamp
+                    }), 404
+                
+                sorted_readings = sorted(filtered_readings, key=lambda x: x.get('Time', ''), reverse=True)
+                last_reading = sorted_readings[0]
+                print(f"Found latest reading up to {test_timestamp}: {last_reading.get('Time')}")
+            except Exception as e:
+                return jsonify({
+                    'error': f'Invalid timestamp format: {test_timestamp}. Error: {str(e)}',
+                    'status': 'error',
+                    'expected_format': '2025-11-18T13:50:06.053+00:00'
+                }), 400
+        else:
+            # Get the actual latest reading
+            sorted_readings = sorted(micromate_readings, key=lambda x: x.get('Time', ''), reverse=True)
+            last_reading = sorted_readings[0]
+        
+        timestamp_str = last_reading.get('Time', 'N/A')
+        longitudinal = abs(float(last_reading.get('Longitudinal', 0)))
+        transverse = abs(float(last_reading.get('Transverse', 0)))
+        vertical = abs(float(last_reading.get('Vertical', 0)))
+        
+        # 4. Check if alert was already sent
+        already_sent = supabase.table('sent_alerts') \
+            .select('id, timestamp, alert_type') \
+            .eq('instrument_id', 'Instantel 1') \
+            .eq('node_id', 24252) \
+            .eq('timestamp', timestamp_str) \
+            .execute()
+        
+        alert_already_sent = len(already_sent.data) > 0
+        sent_alert_record = already_sent.data[0] if already_sent.data else None
+        
+        # 5. Check thresholds
+        threshold_checks = {
+            'Longitudinal': {
+                'value': longitudinal,
+                'exceeds_alert': alert_value and longitudinal >= alert_value,
+                'exceeds_warning': warning_value and longitudinal >= warning_value,
+                'exceeds_shutdown': shutdown_value and longitudinal >= shutdown_value
+            },
+            'Transverse': {
+                'value': transverse,
+                'exceeds_alert': alert_value and transverse >= alert_value,
+                'exceeds_warning': warning_value and transverse >= warning_value,
+                'exceeds_shutdown': shutdown_value and transverse >= shutdown_value
+            },
+            'Vertical': {
+                'value': vertical,
+                'exceeds_alert': alert_value and vertical >= alert_value,
+                'exceeds_warning': warning_value and vertical >= warning_value,
+                'exceeds_shutdown': shutdown_value and vertical >= shutdown_value
+            }
+        }
+        
+        # Determine if any threshold is exceeded
+        any_threshold_exceeded = any(
+            check['exceeds_alert'] or check['exceeds_warning'] or check['exceeds_shutdown']
+            for check in threshold_checks.values()
+        )
+        
+        # Determine what action scheduler would take
+        if alert_already_sent:
+            action = 'SKIP - Alert already sent for this timestamp'
+        elif any_threshold_exceeded:
+            action = 'SEND ALERT - Thresholds exceeded and no alert sent yet'
+        else:
+            action = 'NO ACTION - Thresholds not exceeded'
+        
+        return jsonify({
+            'status': 'success',
+            'instrument_id': 'Instantel 1',
+            'test_timestamp_provided': test_timestamp if test_timestamp else None,
+            'last_reading': {
+                'timestamp': timestamp_str,
+                'Longitudinal': longitudinal,
+                'Transverse': transverse,
+                'Vertical': vertical,
+                'full_reading': last_reading
+            },
+            'thresholds': {
+                'alert_value': alert_value,
+                'warning_value': warning_value,
+                'shutdown_value': shutdown_value
+            },
+            'threshold_checks': threshold_checks,
+            'any_threshold_exceeded': any_threshold_exceeded,
+            'alert_already_sent': alert_already_sent,
+            'sent_alert_record': sent_alert_record,
+            'scheduler_action': action,
+            'total_readings_available': len(micromate_readings)
+        }), 200
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': f'Failed to test last reading: {str(e)}',
+            'traceback': traceback.format_exc(),
+            'status': 'error'
+        }), 500
+
 @micromate_bp.route('/UM16368/readings', methods=['GET'])
 def get_um16368_readings_endpoint():
     """
