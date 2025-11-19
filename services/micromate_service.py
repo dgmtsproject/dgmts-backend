@@ -101,26 +101,30 @@ def get_project_info(instrument_id):
         print(f"Error fetching project info for {instrument_id}: {e}")
         return None
 
-def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=10, force_resend=False):
+def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=30, force_resend=False):
     """Check Instantel Micromate alerts and send emails if thresholds are exceeded
     
-    This function checks ONLY the LAST (most recent) reading record. If thresholds are exceeded
-    and no alert has been sent for that timestamp, it will send an alert.
+    This function checks ALL readings from the last 30 minutes (default). Since readings are
+    inserted in batches every 30 minutes with 5-minute intervals, we need to check all readings
+    in the time window to ensure no alerts are missed.
+    
+    For each reading:
+    - If thresholds are exceeded AND no alert has been sent for that timestamp, send an alert
+    - If alert was already sent for that timestamp, skip it
     
     Args:
         custom_emails (list, optional): Custom email addresses to use instead of instrument emails
-        time_window_minutes (int, optional): DEPRECATED - kept for backward compatibility but not used. Only the last reading is checked.
+        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 30 minutes.
         force_resend (bool, optional): If True, will resend alerts even if they were already sent (for testing). Default is False.
     
     Returns:
         dict: Summary of the alert check including:
-            - total_readings_checked: Number of readings checked (always 1 - the last reading)
-            - readings_with_alerts: Number of readings that exceeded thresholds (0 or 1)
-            - readings_already_sent: Number of readings that already had alerts sent (0 or 1)
-            - emails_sent: Number of emails sent (0 or 1)
+            - total_readings_checked: Number of readings checked
+            - readings_with_alerts: Number of readings that exceeded thresholds
+            - readings_already_sent: Number of readings that already had alerts sent
+            - emails_sent: Number of emails sent
             - alert_timestamps: List of timestamps that had alerts
             - skipped_timestamps: List of timestamps that were skipped (already sent)
-            - last_reading: The last reading that was checked (for debugging)
     """
     print("Checking Instantel Micromate alerts...")
     result_summary = {
@@ -171,9 +175,18 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=10, f
             shutdown_emails = custom_emails
             print(f"Using custom emails for test: {custom_emails}")
 
-        # 2. Note: We now check only the LAST reading, not a time window
-        # The time_window_minutes parameter is kept for backward compatibility but not used
-        print(f"Checking LAST Micromate reading only (not a time window)")
+        # 2. Calculate time range for checking alerts (30 minutes by default)
+        # Readings are inserted in batches every 30 minutes with 5-minute intervals
+        # So we need to check all readings in the last 30 minutes
+        from datetime import datetime, timedelta, timezone
+        utc_now = datetime.now(timezone.utc)
+        
+        # Calculate time window - check readings from the last time_window_minutes
+        # Readings come in UTC format, so we work directly with UTC
+        start_time = utc_now - timedelta(minutes=time_window_minutes)
+        
+        print(f"Checking Micromate readings from last {time_window_minutes} minutes")
+        print(f"Time window: {start_time.strftime('%Y-%m-%dT%H:%M:%S')} UTC to {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
 
         # 3. Fetch data from Micromate API
         url = "https://imsite.dullesgeotechnical.com/api/micromate/readings"
@@ -195,8 +208,7 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=10, f
 
         print(f"Received {len(micromate_readings)} Micromate data points")
 
-        # 4. Get the LAST reading only (most recent by Time)
-        # Sort readings by Time to get the most recent one
+        # 4. Filter readings within the time window and check each one
         alerts_by_timestamp = {}
         
         if not micromate_readings:
@@ -205,141 +217,119 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=10, f
             result_summary['error'] = "No Micromate readings available"
             return result_summary
         
-        # Sort readings by Time (most recent first)
-        try:
-            sorted_readings = sorted(micromate_readings, key=lambda x: x.get('Time', ''), reverse=True)
-            last_reading = sorted_readings[0]  # Get the most recent reading
-        except Exception as e:
-            print(f"Failed to sort readings: {e}")
-            log_alert_event("ERROR", f"Failed to sort readings: {e}", 'Instantel 1')
-            result_summary['error'] = f"Failed to sort readings: {e}"
-            return result_summary
-        
-        if not last_reading:
-            print("No valid last reading found")
-            log_alert_event("ERROR", "No valid last reading found", 'Instantel 1')
-            result_summary['error'] = "No valid last reading found"
-            return result_summary
-        
-        print(f"Checking LAST reading only - Timestamp: {last_reading.get('Time', 'N/A')}")
-        
-        # Print the last reading for verification
-        print("=" * 80)
-        print("LAST READING (for verification):")
-        print("=" * 80)
-        print(f"Time: {last_reading.get('Time', 'N/A')}")
-        print(f"Longitudinal: {last_reading.get('Longitudinal', 'N/A')}")
-        print(f"Transverse: {last_reading.get('Transverse', 'N/A')}")
-        print(f"Vertical: {last_reading.get('Vertical', 'N/A')}")
-        print(f"LongitudinalFrequency: {last_reading.get('LongitudinalFrequency', 'N/A')}")
-        print(f"TransverseFrequency: {last_reading.get('TransverseFrequency', 'N/A')}")
-        print(f"VerticalFrequency: {last_reading.get('VerticalFrequency', 'N/A')}")
-        print(f"LongitudinalMetric: {last_reading.get('LongitudinalMetric', 'N/A')}")
-        print(f"TransverseMetric: {last_reading.get('TransverseMetric', 'N/A')}")
-        print(f"VerticalMetric: {last_reading.get('VerticalMetric', 'N/A')}")
-        print(f"Duration: {last_reading.get('Duration', 'N/A')}")
-        print(f"source_file: {last_reading.get('source_file', 'N/A')}")
-        print("=" * 80)
-        
-        # Check thresholds for the last reading only
-        result_summary['total_readings_checked'] = 1
-        
-        reading = last_reading
-        timestamp_str = reading['Time']
-        longitudinal = abs(float(reading['Longitudinal']))
-        transverse = abs(float(reading['Transverse']))
-        vertical = abs(float(reading['Vertical']))
-        
-        # Print threshold comparisons for debugging
-        print("=" * 80)
-        print("THRESHOLD COMPARISONS:")
-        print("=" * 80)
-        print(f"Longitudinal: {longitudinal:.6f} | Alert: {alert_value} | Warning: {warning_value} | Shutdown: {shutdown_value}")
-        print(f"  - Exceeds Alert: {alert_value and longitudinal >= alert_value}")
-        print(f"  - Exceeds Warning: {warning_value and longitudinal >= warning_value}")
-        print(f"  - Exceeds Shutdown: {shutdown_value and longitudinal >= shutdown_value}")
-        print(f"Transverse: {transverse:.6f} | Alert: {alert_value} | Warning: {warning_value} | Shutdown: {shutdown_value}")
-        print(f"  - Exceeds Alert: {alert_value and transverse >= alert_value}")
-        print(f"  - Exceeds Warning: {warning_value and transverse >= warning_value}")
-        print(f"  - Exceeds Shutdown: {shutdown_value and transverse >= shutdown_value}")
-        print(f"Vertical: {vertical:.6f} | Alert: {alert_value} | Warning: {warning_value} | Shutdown: {shutdown_value}")
-        print(f"  - Exceeds Alert: {alert_value and vertical >= alert_value}")
-        print(f"  - Exceeds Warning: {warning_value and vertical >= warning_value}")
-        print(f"  - Exceeds Shutdown: {shutdown_value and vertical >= shutdown_value}")
-        print("=" * 80)
-        
-        # Check if we've already sent for this timestamp (unless force_resend is True)
-        if not force_resend:
+        # Filter readings within the time window
+        readings_in_window = []
+        for reading in micromate_readings:
             try:
-                already_sent = supabase.table('sent_alerts') \
-                    .select('id, timestamp, alert_type, created_at') \
-                    .eq('instrument_id', 'Instantel 1') \
-                    .eq('node_id', 24252) \
-                    .eq('timestamp', timestamp_str) \
-                    .execute()
-                if already_sent.data:
-                    print(f"⚠️  ALERT ALREADY SENT for timestamp {timestamp_str}")
-                    print(f"   Alert record: {already_sent.data[0]}")
-                    result_summary['readings_already_sent'] += 1
-                    result_summary['skipped_timestamps'].append(timestamp_str)
-                    result_summary['last_reading'] = reading
-                    return result_summary
-                else:
-                    print(f"✅ No alert sent yet for timestamp {timestamp_str} - proceeding with check")
+                timestamp_str = reading.get('Time', '')
+                if not timestamp_str:
+                    continue
+                
+                # Parse timestamp (format: "2025-11-18T22:00:06.055+00:00")
+                reading_dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                
+                # Check if reading is within the time window
+                if start_time <= reading_dt <= utc_now:
+                    readings_in_window.append(reading)
             except Exception as e:
-                print(f"⚠️  WARNING: Error checking sent_alerts table: {e}")
-                print("   Proceeding with alert check anyway (at all cost)")
-                log_alert_event("ERROR", f"Error checking sent_alerts table: {e}", 'Instantel 1')
-        else:
-            print(f"Force resend enabled - checking timestamp {timestamp_str} even if already sent")
+                print(f"Failed to parse timestamp for reading: {e}")
+                continue
+        
+        if not readings_in_window:
+            print(f"No Micromate readings found in time window (last {time_window_minutes} minutes)")
+            log_alert_event("INFO", f"No Micromate readings found in time window (last {time_window_minutes} minutes)", 'Instantel 1')
+            return result_summary
+        
+        print(f"Found {len(readings_in_window)} readings in time window (last {time_window_minutes} minutes)")
+        
+        # Sort readings by Time (oldest first) to process them chronologically
+        sorted_readings = sorted(readings_in_window, key=lambda x: x.get('Time', ''))
+        
+        print("=" * 80)
+        print(f"PROCESSING {len(sorted_readings)} READINGS FROM TIME WINDOW:")
+        print("=" * 80)
+        
+        # Check thresholds for each reading in the time window
+        result_summary['total_readings_checked'] = len(sorted_readings)
+        
+        for reading in sorted_readings:
+            timestamp_str = reading['Time']
+            longitudinal = abs(float(reading.get('Longitudinal', 0)))
+            transverse = abs(float(reading.get('Transverse', 0)))
+            vertical = abs(float(reading.get('Vertical', 0)))
+            
+            print(f"\nChecking reading: {timestamp_str}")
+            print(f"  Values - Longitudinal: {longitudinal:.6f}, Transverse: {transverse:.6f}, Vertical: {vertical:.6f}")
+        
+            # Check if we've already sent for this timestamp (unless force_resend is True)
+            if not force_resend:
+                try:
+                    already_sent = supabase.table('sent_alerts') \
+                        .select('id, timestamp, alert_type, created_at') \
+                        .eq('instrument_id', 'Instantel 1') \
+                        .eq('node_id', 24252) \
+                        .eq('timestamp', timestamp_str) \
+                        .execute()
+                    if already_sent.data:
+                        print(f"  ⏭️  SKIP: Alert already sent for this timestamp")
+                        result_summary['readings_already_sent'] += 1
+                        result_summary['skipped_timestamps'].append(timestamp_str)
+                        continue
+                    else:
+                        print(f"  ✅ No alert sent yet - checking thresholds")
+                except Exception as e:
+                    print(f"  ⚠️  WARNING: Error checking sent_alerts table: {e}")
+                    print("     Proceeding with alert check anyway (at all cost)")
+                    log_alert_event("ERROR", f"Error checking sent_alerts table for {timestamp_str}: {e}", 'Instantel 1')
+            else:
+                print(f"  Force resend enabled - checking even if already sent")
 
-        messages = []
-        threshold_exceeded = False
-        
-        # Check shutdown thresholds (highest priority)
-        for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
-            if shutdown_value and value >= shutdown_value:
-                msg = f"<b>Shutdown threshold reached on {axis_desc} axis:</b> {value:.6f}"
-                messages.append(msg)
-                threshold_exceeded = True
-                print(f"🔴 SHUTDOWN THRESHOLD EXCEEDED: {axis_desc} = {value:.6f} >= {shutdown_value}")
-        
-        # Check warning thresholds (medium priority)
-        for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
-            if warning_value and value >= warning_value:
-                msg = f"<b>Warning threshold reached on {axis_desc} axis:</b> {value:.6f}"
-                messages.append(msg)
-                threshold_exceeded = True
-                print(f"🟡 WARNING THRESHOLD EXCEEDED: {axis_desc} = {value:.6f} >= {warning_value}")
-        
-        # Check alert thresholds (lowest priority)
-        for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
-            if alert_value and value >= alert_value:
-                msg = f"<b>Alert threshold reached on {axis_desc} axis:</b> {value:.6f}"
-                messages.append(msg)
-                threshold_exceeded = True
-                print(f"🟠 ALERT THRESHOLD EXCEEDED: {axis_desc} = {value:.6f} >= {alert_value}")
-        
-        if threshold_exceeded:
-            print(f"✅ THRESHOLDS EXCEEDED - {len(messages)} alert(s) detected")
-        else:
-            print("ℹ️  No thresholds exceeded")
-
-        if messages:
-            result_summary['readings_with_alerts'] += 1
-            result_summary['alert_timestamps'].append(timestamp_str)
-            alerts_by_timestamp[timestamp_str] = {
-                'messages': messages,
-                'timestamp': timestamp_str,
-                'values': {
-                    'Longitudinal': longitudinal, 
-                    'Transverse': transverse, 
-                    'Vertical': vertical
+            messages = []
+            threshold_exceeded = False
+            
+            # Check shutdown thresholds (highest priority)
+            for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+                if shutdown_value and value >= shutdown_value:
+                    msg = f"<b>Shutdown threshold reached on {axis_desc} axis:</b> {value:.6f}"
+                    messages.append(msg)
+                    threshold_exceeded = True
+                    print(f"  🔴 SHUTDOWN THRESHOLD EXCEEDED: {axis_desc} = {value:.6f} >= {shutdown_value}")
+            
+            # Check warning thresholds (medium priority)
+            for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+                if warning_value and value >= warning_value:
+                    msg = f"<b>Warning threshold reached on {axis_desc} axis:</b> {value:.6f}"
+                    messages.append(msg)
+                    threshold_exceeded = True
+                    print(f"  🟡 WARNING THRESHOLD EXCEEDED: {axis_desc} = {value:.6f} >= {warning_value}")
+            
+            # Check alert thresholds (lowest priority)
+            for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
+                if alert_value and value >= alert_value:
+                    msg = f"<b>Alert threshold reached on {axis_desc} axis:</b> {value:.6f}"
+                    messages.append(msg)
+                    threshold_exceeded = True
+                    print(f"  🟠 ALERT THRESHOLD EXCEEDED: {axis_desc} = {value:.6f} >= {alert_value}")
+            
+            if threshold_exceeded:
+                print(f"  ✅ THRESHOLDS EXCEEDED - {len(messages)} alert(s) detected - WILL SEND ALERT")
+                result_summary['readings_with_alerts'] += 1
+                result_summary['alert_timestamps'].append(timestamp_str)
+                alerts_by_timestamp[timestamp_str] = {
+                    'messages': messages,
+                    'timestamp': timestamp_str,
+                    'values': {
+                        'Longitudinal': longitudinal, 
+                        'Transverse': transverse, 
+                        'Vertical': vertical
+                    }
                 }
-            }
+            else:
+                print(f"  ℹ️  No thresholds exceeded")
         
-        # Include last reading in result for debugging
-        result_summary['last_reading'] = reading
+        print("=" * 80)
+        print(f"SUMMARY: Checked {len(sorted_readings)} readings, {len(alerts_by_timestamp)} with alerts, {result_summary['readings_already_sent']} already sent")
+        print("=" * 80)
 
         # 6. Send email if there are alerts - AT ALL COST
         if alerts_by_timestamp:
@@ -451,8 +441,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=10, f
                 log_alert_event("ERROR", "CRITICAL: No alert/warning/shutdown emails configured for Instantel 1", 'Instantel 1')
                 result_summary['error'] = "CRITICAL: No emails configured"
         else:
-            print("No thresholds crossed for the last reading for Micromate.")
-            log_alert_event("INFO", f"No thresholds crossed for the last reading. Timestamp: {reading.get('Time', 'N/A')}", 'Instantel 1')
+            print(f"No thresholds crossed for any reading in the time window (checked {len(sorted_readings)} readings).")
+            log_alert_event("INFO", f"No thresholds crossed for any reading in the time window. Checked {len(sorted_readings)} readings.", 'Instantel 1')
         
         return result_summary
     except Exception as e:
