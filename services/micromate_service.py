@@ -175,18 +175,9 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=30, f
             shutdown_emails = custom_emails
             print(f"Using custom emails for test: {custom_emails}")
 
-        # 2. Calculate time range for checking alerts (30 minutes by default)
-        # Readings are inserted in batches every 30 minutes with 5-minute intervals
-        # So we need to check all readings in the last 30 minutes
-        from datetime import datetime, timedelta, timezone
-        utc_now = datetime.now(timezone.utc)
-        
-        # Calculate time window - check readings from the last time_window_minutes
-        # Readings come in UTC format, so we work directly with UTC
-        start_time = utc_now - timedelta(minutes=time_window_minutes)
-        
-        print(f"Checking Micromate readings from last {time_window_minutes} minutes")
-        print(f"Time window: {start_time.strftime('%Y-%m-%dT%H:%M:%S')} UTC to {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
+        # 2. Note: We'll filter readings based on their own timestamps, not system time
+        # Get all readings first, then filter based on the most recent reading's timestamp
+        print(f"Will check readings from last {time_window_minutes} minutes based on reading timestamps")
 
         # 3. Fetch data from Micromate API
         url = "https://imsite.dullesgeotechnical.com/api/micromate/readings"
@@ -208,7 +199,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=30, f
 
         print(f"Received {len(micromate_readings)} Micromate data points")
 
-        # 4. Filter readings within the time window and check each one
+        # 4. Filter readings based on their own timestamps (not system time)
+        # Get the most recent reading's timestamp and filter all readings within time_window_minutes of it
         alerts_by_timestamp = {}
         
         if not micromate_readings:
@@ -217,7 +209,35 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=30, f
             result_summary['error'] = "No Micromate readings available"
             return result_summary
         
-        # Filter readings within the time window
+        # Sort all readings by Time to find the most recent
+        try:
+            sorted_all_readings = sorted(micromate_readings, key=lambda x: x.get('Time', ''), reverse=True)
+            most_recent_reading = sorted_all_readings[0]
+            most_recent_timestamp = most_recent_reading.get('Time', '')
+            
+            if not most_recent_timestamp:
+                print("No valid timestamp in most recent reading")
+                log_alert_event("ERROR", "No valid timestamp in most recent reading", 'Instantel 1')
+                result_summary['error'] = "No valid timestamp in most recent reading"
+                return result_summary
+            
+            # Parse the most recent reading's timestamp
+            from datetime import datetime, timedelta
+            most_recent_dt = datetime.fromisoformat(most_recent_timestamp.replace('Z', '+00:00'))
+            
+            # Calculate the cutoff time: time_window_minutes before the most recent reading
+            cutoff_time = most_recent_dt - timedelta(minutes=time_window_minutes)
+            
+            print(f"Most recent reading timestamp: {most_recent_timestamp}")
+            print(f"Filtering readings from {cutoff_time.strftime('%Y-%m-%dT%H:%M:%S')} to {most_recent_timestamp}")
+            
+        except Exception as e:
+            print(f"Failed to process reading timestamps: {e}")
+            log_alert_event("ERROR", f"Failed to process reading timestamps: {e}", 'Instantel 1')
+            result_summary['error'] = f"Failed to process reading timestamps: {e}"
+            return result_summary
+        
+        # Filter readings within the time window (based on reading timestamps, not system time)
         readings_in_window = []
         for reading in micromate_readings:
             try:
@@ -228,19 +248,19 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=30, f
                 # Parse timestamp (format: "2025-11-18T22:00:06.055+00:00")
                 reading_dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                 
-                # Check if reading is within the time window
-                if start_time <= reading_dt <= utc_now:
+                # Check if reading is within the time window (between cutoff_time and most_recent_dt)
+                if cutoff_time <= reading_dt <= most_recent_dt:
                     readings_in_window.append(reading)
             except Exception as e:
                 print(f"Failed to parse timestamp for reading: {e}")
                 continue
         
         if not readings_in_window:
-            print(f"No Micromate readings found in time window (last {time_window_minutes} minutes)")
-            log_alert_event("INFO", f"No Micromate readings found in time window (last {time_window_minutes} minutes)", 'Instantel 1')
+            print(f"No Micromate readings found in time window (last {time_window_minutes} minutes from most recent reading)")
+            log_alert_event("INFO", f"No Micromate readings found in time window (last {time_window_minutes} minutes from most recent reading)", 'Instantel 1')
             return result_summary
         
-        print(f"Found {len(readings_in_window)} readings in time window (last {time_window_minutes} minutes)")
+        print(f"Found {len(readings_in_window)} readings in time window (last {time_window_minutes} minutes from most recent reading)")
         
         # Sort readings by Time (oldest first) to process them chronologically
         sorted_readings = sorted(readings_in_window, key=lambda x: x.get('Time', ''))
