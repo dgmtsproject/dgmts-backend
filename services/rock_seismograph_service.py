@@ -111,20 +111,21 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
 
-        # 2. Calculate time range for the last minute using UTC and convert to EST properly
+        # 2. Calculate time range for the last 6 hours using UTC and convert to EST properly
         # Account for instrument clock being 1 hour behind EST
+        # Using 6 hours to avoid missing alerts due to scheduler timing issues
         utc_now = datetime.now(timezone.utc)
         est_tz = pytz.timezone('US/Eastern')
         now_est = utc_now.astimezone(est_tz)
         # Subtract 1 hour to account for instrument clock being behind
         now_instrument_time = now_est - timedelta(hours=1)
-        one_minute_ago_instrument_time = now_instrument_time - timedelta(minutes=1)
+        six_hours_ago_instrument_time = now_instrument_time - timedelta(hours=6)
         
         # Format dates for API (using instrument time which is 1 hour behind EST)
-        start_time = one_minute_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
+        start_time = six_hours_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
         end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
         
-        print(f"Fetching {instrument_id} Rock Seismograph data from {start_time} to {end_time} EST")
+        print(f"Fetching {instrument_id} Rock Seismograph data from {start_time} to {end_time} EST (last 6 hours)")
         print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
         print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
         print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
@@ -171,25 +172,60 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         
         # Handle 204 No Content response
         if response.status_code == 204:
-            print(f"No data available for {instrument_id} in the last minute (204 No Content)")
+            print(f"No data available for {instrument_id} in the last 6 hours (204 No Content)")
             return
 
         data = response.json()
         background_data = data.get('data', [])
         
         if not background_data:
-            print(f"No background data received for {instrument_id} in the last minute")
+            print(f"No background data received for {instrument_id} in the last 6 hours")
             return
+        
+        print(f"Received {len(background_data)} readings from API for {instrument_id}")
 
-        # 4. Check thresholds for each reading
-        alerts_by_timestamp = {}
+        # 4. OPTIMIZATION: First filter readings by thresholds (in memory), then check DB only for exceeded ones
+        print(f"Step 1: Filtering readings that exceed thresholds (in memory)...")
+        readings_with_exceeded_thresholds = []
+        
         for entry in background_data:
             timestamp = entry[0]  # Format: "2025-08-01T15:40:37.741-04:00"
             x_value = abs(float(entry[1]))
             y_value = abs(float(entry[2]))
             z_value = abs(float(entry[3]))
             
-            # Check if we've already sent for this timestamp
+            # Quick threshold check (in memory, no DB call)
+            threshold_exceeded = False
+            if (shutdown_value and (x_value >= shutdown_value or y_value >= shutdown_value or z_value >= shutdown_value)) or \
+               (warning_value and (x_value >= warning_value or y_value >= warning_value or z_value >= warning_value)) or \
+               (alert_value and (x_value >= alert_value or y_value >= alert_value or z_value >= alert_value)):
+                threshold_exceeded = True
+            
+            if threshold_exceeded:
+                readings_with_exceeded_thresholds.append({
+                    'timestamp': timestamp,
+                    'x_value': x_value,
+                    'y_value': y_value,
+                    'z_value': z_value
+                })
+        
+        print(f"Step 1 Complete: Found {len(readings_with_exceeded_thresholds)} readings that exceed thresholds (out of {len(background_data)} total)")
+        
+        if not readings_with_exceeded_thresholds:
+            print(f"No thresholds crossed for any reading in the last 6 hours for {instrument_id}.")
+            return
+        
+        # 5. Now check DB only for readings that exceeded thresholds (much faster!)
+        print(f"Step 2: Checking database for already-sent alerts (only {len(readings_with_exceeded_thresholds)} queries instead of {len(background_data)})...")
+        alerts_by_timestamp = {}
+        
+        for reading in readings_with_exceeded_thresholds:
+            timestamp = reading['timestamp']
+            x_value = reading['x_value']
+            y_value = reading['y_value']
+            z_value = reading['z_value']
+            
+            # Check if we've already sent for this timestamp (only for readings that exceeded thresholds)
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
                 .eq('instrument_id', instrument_id) \
@@ -223,6 +259,8 @@ def check_and_send_rock_seismograph_alert(instrument_id):
                     'timestamp': timestamp,
                     'values': {'X': x_value, 'Y': y_value, 'Z': z_value}
                 }
+        
+        print(f"Step 2 Complete: {len(alerts_by_timestamp)} new alerts to send (after filtering out already-sent)")
 
         # 6. Send email if there are alerts
         if alerts_by_timestamp:
@@ -271,7 +309,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             else:
                 print(f"No alert/warning/shutdown emails configured for {instrument_id}")
         else:
-            print(f"No thresholds crossed for any reading in the last minute for {instrument_id}.")
+            print(f"No thresholds crossed for any reading in the last 6 hours for {instrument_id}.")
     except Exception as e:
         print(f"Error in check_and_send_rock_seismograph_alert for {instrument_id}: {e}")
         log_alert_event("ERROR", f"Error in alert check for {instrument_id}: {str(e)}", instrument_id)
@@ -447,3 +485,234 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
     """
     
     return body
+
+def check_and_send_rock_seismograph_alert_test(instrument_id):
+    """TEST VERSION: Check Rock Seismograph alerts with hardcoded thresholds and test email
+    
+    This is a test version that:
+    - Uses hardcoded thresholds: 0.0001 for alert, warning, and shutdown
+    - Sends to test email: mahmerraza19@gmail.com
+    - Uses actual ROCKSMG dataset
+    - Keeps same mail format
+    - Checks last 6 hours of data
+    """
+    print(f"[TEST] Checking {instrument_id} Rock Seismograph alerts using background API...")
+    try:
+        # 1. Get instrument settings (for device_id and instrument details only)
+        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
+        instrument = instrument_resp.data[0] if instrument_resp.data else None
+        if not instrument:
+            print(f"[TEST] No instrument found for {instrument_id}")
+            log_alert_event("ERROR", f"[TEST] No instrument found for {instrument_id}", instrument_id)
+            return
+
+        # TEST: Use hardcoded thresholds
+        alert_value = 0.013
+        warning_value = 0.013
+        shutdown_value = 0.013
+        
+        # TEST: Use test email
+        test_email = "mahmerraza19@gmail.com"
+        alert_emails = [test_email]
+        warning_emails = [test_email]
+        shutdown_emails = [test_email]
+    
+        print(f"[TEST] Sending to test email: {test_email}")
+
+        # 2. Calculate time range for the last 6 hours using UTC and convert to EST properly
+        # Account for instrument clock being 1 hour behind EST
+        utc_now = datetime.now(timezone.utc)
+        est_tz = pytz.timezone('US/Eastern')
+        now_est = utc_now.astimezone(est_tz)
+        # Subtract 1 hour to account for instrument clock being behind
+        now_instrument_time = now_est - timedelta(hours=1)
+        six_hours_ago_instrument_time = now_instrument_time - timedelta(hours=6)
+        
+        # Format dates for API (using instrument time which is 1 hour behind EST)
+        start_time = six_hours_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
+        end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
+        
+        print(f"[TEST] Fetching {instrument_id} Rock Seismograph data from {start_time} to {end_time} EST (last 6 hours)")
+
+        # 3. Fetch background data from Syscom API
+        api_key = os.environ.get('SYSCOM_API_KEY')
+        if not api_key:
+            print("[TEST] No SYSCOM_API_KEY set in environment")
+            return
+
+        # Get device ID from database (not project_id)
+        device_id = None
+        try:
+            instrument_info = get_project_info(instrument_id)
+            if instrument_info:
+                # Get the actual instrument record to find syscom_device_id
+                instrument_resp = supabase.table('instruments').select('syscom_device_id').eq('instrument_id', instrument_id).execute()
+                if instrument_resp.data and instrument_resp.data[0].get('syscom_device_id'):
+                    device_id = instrument_resp.data[0]['syscom_device_id']
+                else:
+                    print(f"[TEST] No syscom_device_id found for {instrument_id}")
+                    device_id = None
+            else:
+                print(f"[TEST] Could not get instrument info for {instrument_id}")
+        except Exception as e:
+            print(f"[TEST] Error getting device info for {instrument_id}: {e}")
+        
+        if not device_id:
+            print(f"[TEST] No device_id available for {instrument_id}, skipping API call")
+            log_alert_event("ERROR", f"[TEST] No device_id available for {instrument_id}", instrument_id)
+            return
+            
+        url = f"https://scs.syscom-instruments.com/public-api/v1/records/background/{device_id}/data?start={start_time}&end={end_time}"
+        headers = {"x-scs-api-key": api_key}
+        response = requests.get(url, headers=headers)
+        if response.status_code not in [200, 204]:
+            print(f"[TEST] Failed to fetch {instrument_id} background data: {response.status_code} {response.text}")
+            log_alert_event("API_ERROR", f"[TEST] Failed to fetch data: {response.status_code} - {response.text}", instrument_id)
+            if response.status_code == 404:
+                print(f"[TEST] Device ID {device_id} not found in Syscom API.")
+                log_alert_event("ERROR", f"[TEST] API Error: Device ID {device_id} not found", instrument_id)
+            return
+        
+        # Handle 204 No Content response
+        if response.status_code == 204:
+            print(f"[TEST] No data available for {instrument_id} in the last 6 hours (204 No Content)")
+            return
+
+        data = response.json()
+        background_data = data.get('data', [])
+        
+        if not background_data:
+            print(f"[TEST] No background data received for {instrument_id} in the last 6 hours")
+            return
+        
+        print(f"[TEST] Received {len(background_data)} readings from API for {instrument_id}")
+
+        # 4. OPTIMIZATION: First filter readings by thresholds (in memory), then check DB only for exceeded ones
+        print(f"[TEST] Step 1: Filtering readings that exceed thresholds (in memory)...")
+        readings_with_exceeded_thresholds = []
+        
+        for entry in background_data:
+            timestamp = entry[0]  # Format: "2025-08-01T15:40:37.741-04:00"
+            x_value = abs(float(entry[1]))
+            y_value = abs(float(entry[2]))
+            z_value = abs(float(entry[3]))
+            
+            # Quick threshold check (in memory, no DB call)
+            threshold_exceeded = False
+            if (shutdown_value and (x_value >= shutdown_value or y_value >= shutdown_value or z_value >= shutdown_value)) or \
+               (warning_value and (x_value >= warning_value or y_value >= warning_value or z_value >= warning_value)) or \
+               (alert_value and (x_value >= alert_value or y_value >= alert_value or z_value >= alert_value)):
+                threshold_exceeded = True
+            
+            if threshold_exceeded:
+                readings_with_exceeded_thresholds.append({
+                    'timestamp': timestamp,
+                    'x_value': x_value,
+                    'y_value': y_value,
+                    'z_value': z_value
+                })
+        
+        print(f"[TEST] Step 1 Complete: Found {len(readings_with_exceeded_thresholds)} readings that exceed thresholds (out of {len(background_data)} total)")
+        
+        if not readings_with_exceeded_thresholds:
+            print(f"[TEST] No thresholds exceeded in any reading for {instrument_id}.")
+            return
+        
+        # 5. Now check DB only for readings that exceeded thresholds (much faster!)
+        print(f"[TEST] Step 2: Checking database for already-sent alerts (only {len(readings_with_exceeded_thresholds)} queries instead of {len(background_data)})...")
+        alerts_by_timestamp = {}
+        
+        for reading in readings_with_exceeded_thresholds:
+            timestamp = reading['timestamp']
+            x_value = reading['x_value']
+            y_value = reading['y_value']
+            z_value = reading['z_value']
+            
+            # Check if we've already sent for this timestamp (only for readings that exceeded thresholds)
+            already_sent = supabase.table('sent_alerts') \
+                .select('id') \
+                .eq('instrument_id', instrument_id) \
+                .eq('node_id', device_id) \
+                .eq('timestamp', timestamp) \
+                .execute()
+            if already_sent.data:
+                print(f"[TEST] {instrument_id} alert already sent for timestamp {timestamp}, skipping.")
+                continue
+
+            messages = []
+            
+            # Check shutdown thresholds
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
+                if shutdown_value and value >= shutdown_value:
+                    messages.append(f"<b>Shutdown threshold reached on {axis}-axis:</b> {value:.6f}")
+            
+            # Check warning thresholds
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
+                if warning_value and value >= warning_value:
+                    messages.append(f"<b>Warning threshold reached on {axis}-axis:</b> {value:.6f}")
+            
+            # Check alert thresholds
+            for axis, value in [('X', x_value), ('Y', y_value), ('Z', z_value)]:
+                if alert_value and value >= alert_value:
+                    messages.append(f"<b>Alert threshold reached on {axis}-axis:</b> {value:.6f}")
+
+            if messages:
+                alerts_by_timestamp[timestamp] = {
+                    'messages': messages,
+                    'timestamp': timestamp,
+                    'values': {'X': x_value, 'Y': y_value, 'Z': z_value}
+                }
+        
+        print(f"[TEST] Step 2 Complete: {len(alerts_by_timestamp)} new alerts to send (after filtering out already-sent)")
+
+        # 6. Send email if there are alerts
+        if alerts_by_timestamp:
+            seismograph_name = Config.ROCK_SEISMOGRAPH_INSTRUMENTS[instrument_id]['name']
+            
+            # Get project information and instrument details from database
+            project_name = "Yellow Line ANC"  # Default fallback
+            instrument_details = []
+            
+            try:
+                instrument_info = get_project_info(instrument_id)
+                if instrument_info:
+                    instrument_details.append(instrument_info)
+                    project_name = instrument_info['project_name']
+            except Exception as e:
+                print(f"[TEST] Error getting project info for {instrument_id}: {e}")
+                
+            body = _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, project_name, instrument_id, instrument_details)
+            
+            current_time = datetime.now(timezone.utc)
+            current_time_est = current_time.astimezone(est_tz)
+            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            subject = f"[TEST] 🌊 {seismograph_name} Alert Notification - {formatted_time}"
+            
+            all_emails = set(alert_emails + warning_emails + shutdown_emails)
+            if all_emails:
+                email_sent = send_email(",".join(all_emails), subject, body)
+                if email_sent:
+                    print(f"[TEST] Alert email sent successfully for {instrument_id} to {len(all_emails)} recipients ({test_email})")
+                    # Record that we've sent for each timestamp
+                    for timestamp, alert_data in alerts_by_timestamp.items():
+                        # Determine the highest priority alert type
+                        alert_type = _determine_alert_type(alert_data['messages'], shutdown_value, warning_value, alert_value)
+                        
+                        sent_alert_resp = supabase.table('sent_alerts').insert({
+                            'instrument_id': instrument_id,
+                            'node_id': device_id,
+                            'timestamp': alert_data['timestamp'],
+                            'alert_type': alert_type
+                        }).execute()
+                        if sent_alert_resp.data:
+                            alert_id = sent_alert_resp.data[0]['id']
+                            log_alert_event("ALERT_RECORDED", f"[TEST] Alert recorded in sent_alerts table with ID {alert_id}", instrument_id, alert_id)
+                else:
+                    log_alert_event("SEND EMAIL_FAILED", f"[TEST] Failed to send alert email for {instrument_id}", instrument_id)
+            else:
+                print(f"[TEST] No emails configured for {instrument_id}")
+        else:
+            print(f"[TEST] No thresholds crossed for any reading in the last 6 hours for {instrument_id}.")
+    except Exception as e:
+        print(f"[TEST] Error in check_and_send_rock_seismograph_alert_test for {instrument_id}: {e}")
+        log_alert_event("ERROR", f"[TEST] Error in alert check for {instrument_id}: {str(e)}", instrument_id)
