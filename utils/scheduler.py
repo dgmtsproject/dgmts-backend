@@ -3,7 +3,8 @@ import time
 import threading
 from services.sensor_service import fetch_and_store_all_sensor_data
 from services.alert_service import check_and_send_tiltmeter_alerts, check_and_send_seismograph_alert, check_and_send_smg3_seismograph_alert
-from services.rock_seismograph_service import check_and_send_rock_seismograph_alert, check_and_send_rock_seismograph_alert_test
+from services.rock_seismograph_service import check_and_send_rock_seismograph_alert
+# Note: check_and_send_rock_seismograph_alert_test is only for local testing via test.py
 from services.micromate_service import check_and_send_micromate_alert, check_and_send_instantel2_alert
 from config import Config
 
@@ -29,9 +30,8 @@ def setup_scheduled_tasks():
     for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():
         schedule.every().minute.do(check_and_send_rock_seismograph_alert, instrument_id)
     
-    # Schedule Rock Seismograph TEST alerts for each instrument (test version with hardcoded thresholds)
-    for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():
-        schedule.every().minute.do(check_and_send_rock_seismograph_alert_test, instrument_id)
+    # NOTE: Test scheduler (check_and_send_rock_seismograph_alert_test) is NOT scheduled in production
+    # It should only be run manually via test.py for local testing
 
 def start_scheduler():
     """Start the scheduler in a background thread"""
