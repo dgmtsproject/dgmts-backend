@@ -60,6 +60,11 @@ class Config:
     # Syscom API Configuration
     SYSCOM_API_KEY = os.getenv('SYSCOM_API_KEY')
     
+    # Authorize.net Configuration
+    AUTHORIZE_NET_API_LOGIN_ID = os.getenv('AUTHORIZE_NET_API_LOGIN_ID')
+    AUTHORIZE_NET_TRANSACTION_KEY = os.getenv('AUTHORIZE_NET_TRANSACTION_KEY')
+    AUTHORIZE_NET_SANDBOX = os.getenv('AUTHORIZE_NET_SANDBOX', 'true').lower() == 'true'
+    
     # Reset tokens storage (in production, use Redis or database)
     RESET_TOKENS = {}
     
