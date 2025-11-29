@@ -3,6 +3,7 @@ from config import Config
 import requests
 import json
 import time
+import re
 
 # Create Blueprint
 payment_bp = Blueprint('payment', __name__, url_prefix='/api')
@@ -108,10 +109,17 @@ def process_payment():
         
         # Make request to Authorize.net
         headers = {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
         }
         
         response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+        
+        # Debug: log response details
+        print(f"Response status: {response.status_code}")
+        print(f"Response headers: {dict(response.headers)}")
+        print(f"Response text length: {len(response.text)}")
+        print(f"Response text (first 500 chars): {response.text[:500]}")
         
         if response.status_code != 200:
             return jsonify({
@@ -120,14 +128,37 @@ def process_payment():
                 "details": response.text
             }), 500
         
-        # Parse response
+        # Parse response - handle BOM and encoding issues
         try:
-            result = response.json()
-        except json.JSONDecodeError:
+            # Remove BOM if present and strip whitespace
+            response_text = response.text.lstrip('\ufeff').strip()
+            result = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            # Try to extract transaction info from partial response if possible
+            print(f"JSON decode error: {e}")
+            print(f"Response text (first 1000 chars): {response_text[:1000]}")
+            
+            # Check if we can extract success info from the text
+            if '"responseCode":"1"' in response_text or '"responseCode":1' in response_text:
+                # Try to extract transaction ID
+                trans_id_match = re.search(r'"transId":"(\d+)"', response_text)
+                auth_code_match = re.search(r'"authCode":"([^"]+)"', response_text)
+                
+                if trans_id_match:
+                    return jsonify({
+                        "status": "success",
+                        "message": "Payment processed successfully (parsed from response)",
+                        "transactionId": trans_id_match.group(1),
+                        "authCode": auth_code_match.group(1) if auth_code_match else None,
+                        "responseCode": "1",
+                        "note": "Response parsing had issues but transaction was successful"
+                    }), 200
+            
             return jsonify({
                 "error": "Invalid response from payment gateway",
                 "status": "error",
-                "details": response.text[:500]
+                "details": response_text[:500],
+                "json_error": str(e)
             }), 500
         
         # Check transaction response
