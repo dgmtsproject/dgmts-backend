@@ -662,20 +662,21 @@ def check_and_send_seismograph_alert(custom_emails=None):
             shutdown_emails = custom_emails
             print(f"Using custom emails for test: {custom_emails}")
 
-        # 2. Calculate time range for the last minute using UTC and convert to EST properly
+        # 2. Calculate time range for the last 6 hours using UTC and convert to EST properly
         # Account for instrument clock being 1 hour behind EST
+        # Using 6 hours to avoid missing alerts due to scheduler timing issues
         utc_now = datetime.now(timezone.utc)
         est_tz = pytz.timezone('US/Eastern')
         now_est = utc_now.astimezone(est_tz)
         # Subtract 1 hour to account for instrument clock being behind
         now_instrument_time = now_est - timedelta(hours=1)
-        one_minute_ago_instrument_time = now_instrument_time - timedelta(minutes=1)
+        six_hours_ago_instrument_time = now_instrument_time - timedelta(hours=6)
         
         # Format dates for API (using instrument time which is 1 hour behind EST)
-        start_time = one_minute_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
+        start_time = six_hours_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
         end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
         
-        print(f"Fetching seismograph data from {start_time} to {end_time} EST")
+        print(f"Fetching SMG-1 seismograph data from {start_time} to {end_time} EST (last 6 hours)")
         print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
         print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
         print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
@@ -696,25 +697,60 @@ def check_and_send_seismograph_alert(custom_emails=None):
         
         # Handle 204 No Content response
         if response.status_code == 204:
-            print("No data available for SMG-1 in the last minute (204 No Content)")
+            print("No data available for SMG-1 in the last 6 hours (204 No Content)")
             return
 
         data = response.json()
         background_data = data.get('data', [])
         
         if not background_data:
-            print("No background data received for the last minute")
+            print("No background data received for SMG-1 in the last 6 hours")
             return
 
-        # 4. Check thresholds for each reading
-        alerts_by_timestamp = {}
+        print(f"Received {len(background_data)} readings from API for SMG-1")
+
+        # 4. OPTIMIZATION: First filter readings by thresholds (in memory), then check DB only for exceeded ones
+        print(f"Step 1: Filtering readings that exceed thresholds (in memory)...")
+        readings_with_exceeded_thresholds = []
+        
         for entry in background_data:
             timestamp = entry[0]  # Format: "2025-08-01T15:40:37.741-04:00"
             x_value = abs(float(entry[1]))
             y_value = abs(float(entry[2]))
             z_value = abs(float(entry[3]))
             
-            # Check if we've already sent for this timestamp
+            # Quick threshold check (in memory, no DB call)
+            threshold_exceeded = False
+            if (shutdown_value and (x_value >= shutdown_value or y_value >= shutdown_value or z_value >= shutdown_value)) or \
+               (warning_value and (x_value >= warning_value or y_value >= warning_value or z_value >= warning_value)) or \
+               (alert_value and (x_value >= alert_value or y_value >= alert_value or z_value >= alert_value)):
+                threshold_exceeded = True
+            
+            if threshold_exceeded:
+                readings_with_exceeded_thresholds.append({
+                    'timestamp': timestamp,
+                    'x_value': x_value,
+                    'y_value': y_value,
+                    'z_value': z_value
+                })
+        
+        print(f"Step 1 Complete: Found {len(readings_with_exceeded_thresholds)} readings that exceed thresholds (out of {len(background_data)} total)")
+        
+        if not readings_with_exceeded_thresholds:
+            print("No thresholds crossed for any reading in the last 6 hours for SMG-1.")
+            return
+        
+        # 5. Now check DB only for readings that exceeded thresholds (much faster!)
+        print(f"Step 2: Checking database for already-sent alerts (only {len(readings_with_exceeded_thresholds)} queries instead of {len(background_data)})...")
+        alerts_by_timestamp = {}
+        
+        for reading in readings_with_exceeded_thresholds:
+            timestamp = reading['timestamp']
+            x_value = reading['x_value']
+            y_value = reading['y_value']
+            z_value = reading['z_value']
+            
+            # Check if we've already sent for this timestamp (only for readings that exceeded thresholds)
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
                 .eq('instrument_id', 'SMG-1') \
@@ -722,7 +758,7 @@ def check_and_send_seismograph_alert(custom_emails=None):
                 .eq('timestamp', timestamp) \
                 .execute()
             if already_sent.data:
-                print(f"Alert already sent for timestamp {timestamp}, skipping.")
+                print(f"SMG-1 alert already sent for timestamp {timestamp}, skipping.")
                 continue
 
             messages = []
@@ -748,6 +784,8 @@ def check_and_send_seismograph_alert(custom_emails=None):
                     'timestamp': timestamp,
                     'values': {'X': x_value, 'Y': y_value, 'Z': z_value}
                 }
+        
+        print(f"Step 2 Complete: {len(alerts_by_timestamp)} new alerts to send (after filtering out already-sent)")
 
         # 6. Send email if there are alerts
         if alerts_by_timestamp:
@@ -776,30 +814,35 @@ def check_and_send_seismograph_alert(custom_emails=None):
             body = _create_seismograph_email_body(alerts_by_timestamp, "Seismograph", project_name, instrument_details)
             
             current_time = datetime.now(timezone.utc)
-            current_time_est = current_time.astimezone(est)
+            current_time_est = current_time.astimezone(est_tz)
             formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
             subject = f"🌊 Seismograph Alert Notification - {formatted_time}"
             
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
             if all_emails:
-                send_email(",".join(all_emails), subject, body)
-                print(f"Sent seismograph alert email for {len(alerts_by_timestamp)} timestamps with alerts")
-                
-                # Record that we've sent for each timestamp
-                for timestamp, alert_data in alerts_by_timestamp.items():
-                    # Determine the highest priority alert type
-                    alert_type = _determine_alert_type(alert_data['messages'])
-                    
-                    supabase.table('sent_alerts').insert({
-                        'instrument_id': 'SMG-1',
-                        'node_id': 15092,
-                        'timestamp': alert_data['timestamp'],
-                        'alert_type': alert_type
-                    }).execute()
+                email_sent = send_email(",".join(all_emails), subject, body)
+                if email_sent:
+                    print(f"Alert email sent successfully for SMG-1 to {len(all_emails)} recipients")
+                    # Record that we've sent for each timestamp
+                    for timestamp, alert_data in alerts_by_timestamp.items():
+                        # Determine the highest priority alert type
+                        alert_type = _determine_alert_type(alert_data['messages'])
+                        
+                        sent_alert_resp = supabase.table('sent_alerts').insert({
+                            'instrument_id': 'SMG-1',
+                            'node_id': 15092,
+                            'timestamp': alert_data['timestamp'],
+                            'alert_type': alert_type
+                        }).execute()
+                        if sent_alert_resp.data:
+                            alert_id = sent_alert_resp.data[0]['id']
+                            log_alert_event("ALERT_RECORDED", f"Alert recorded in sent_alerts table with ID {alert_id}", 'SMG-1', alert_id)
+                else:
+                    log_alert_event("SEND EMAIL_FAILED", f"Failed to send alert email for SMG-1", 'SMG-1')
             else:
                 print("No alert/warning/shutdown emails configured for SMG-1")
         else:
-            print("No thresholds crossed for any reading in the last minute.")
+            print("No thresholds crossed for any reading in the last 6 hours for SMG-1.")
     except Exception as e:
         print(f"Error in check_and_send_seismograph_alert: {e}")
         log_alert_event("ERROR", f"Error in check_and_send_seismograph_alert: {e}", 'SMG-1')

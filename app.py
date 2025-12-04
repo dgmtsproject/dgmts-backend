@@ -219,7 +219,11 @@ def send_missed_smg1_alerts_endpoint():
         
         data = request.get_json() or {}
         instrument_id = data.get('instrument_id', 'SMG-1')
-        days_back = data.get('days_back', 3)  # Default to 3 days as requested
+        # Convert days_back to int, default to 3 if not provided or invalid
+        try:
+            days_back = int(data.get('days_back', 3))
+        except (ValueError, TypeError):
+            days_back = 3
         emails = data.get('emails', [])  # Accept emails parameter
         
         # Handle emails - can be list, comma-separated string, or single string
