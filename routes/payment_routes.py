@@ -43,9 +43,9 @@ def process_payment():
         # Validate amount
         try:
             amount = float(data['amount'])
-            if amount < 100 or amount > 300:
+            if amount <= 0:
                 return jsonify({
-                    "error": "Amount must be between $100 and $300",
+                    "error": "Amount must be greater than 0",
                     "status": "error"
                 }), 400
         except (ValueError, TypeError):
