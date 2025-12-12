@@ -63,7 +63,7 @@ class Config:
     # Authorize.net Configuration
     AUTHORIZE_NET_API_LOGIN_ID = os.getenv('AUTHORIZE_NET_API_LOGIN_ID')
     AUTHORIZE_NET_TRANSACTION_KEY = os.getenv('AUTHORIZE_NET_TRANSACTION_KEY')
-    AUTHORIZE_NET_SANDBOX = os.getenv('AUTHORIZE_NET_SANDBOX', 'true').lower() == 'true'  # Default to sandbox
+    AUTHORIZE_NET_SANDBOX = os.getenv('AUTHORIZE_NET_SANDBOX', 'false').lower() == 'true'  # Default to production
     
     # Reset tokens storage (in production, use Redis or database)
     RESET_TOKENS = {}
