@@ -549,7 +549,6 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=10, 
         # 3. Fetch data from UM16368 API with date filtering
         # For alerts, we want to check the latest entries from the last 1-2 days
         # to ensure we don't miss any alerts and account for single day with latest entries
-        from datetime import datetime
         
         # Calculate date range: Check last 2 days to ensure we get latest entries
         two_days_ago = now_instrument_time - timedelta(days=2)
@@ -557,8 +556,6 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=10, 
         # Format dates for API (YYYY-MM-DD format)
         from_date = two_days_ago.strftime('%Y-%m-%d')
         to_date = now_instrument_time.strftime('%Y-%m-%d')
-        
-        print(f"Fetching UM16368 data from API with date filter: {from_date} to {to_date}")
         
         url = f"https://imsite.dullesgeotechnical.com/api/micromate/UM16368/readings?fromdatetime={from_date}&todatetime={to_date}"
         response = requests.get(url)
@@ -571,9 +568,7 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=10, 
         data = response.json()
         um16368_readings = data.get('UM16368Readings', [])
         
-        # Log filter info if available
-        if 'filters' in data:
-            print(f"API date filtering applied: {data['filters'].get('total_before_filter', 0)} -> {data['filters'].get('total_after_filter', 0)} readings")
+        # Filter info available in data['filters'] if needed
         
         if not um16368_readings:
             print("No UM16368 data received")
@@ -1108,7 +1103,7 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
     csv_directory = "/root/root/ftp-server/Dulles Test/UM16368/CSV"
     
     if not os.path.exists(csv_directory):
-        print(f"CSV directory not found: {csv_directory}")
+        # CSV directory not found
         return {
             'readings': [],
             'summary': {
@@ -1126,7 +1121,7 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
     csv_files = glob.glob(pattern)
     
     if not csv_files:
-        print(f"No IDFH.csv files found in directory: {csv_directory}")
+        # No IDFH.csv files found
         return {
             'readings': [],
             'summary': {
@@ -1414,12 +1409,7 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
                             elif format_val == "L90" and mic_l90_index is None:
                                 mic_l90_index = i
                 
-                # Debug: Print row contents and found indices
-                print(f"File {os.path.basename(file_path)}: PPV at row {ppv_row_idx + 1}, TIME at row {header_row_idx + 1}")
-                print(f"  Column row (row {format_row_idx - 1}): {column_row[:10] if len(column_row) > 10 else column_row}")
-                print(f"  Format row (row {format_row_idx}): {format_row[:10] if len(format_row) > 10 else format_row}")
-                print(f"  Header row (row {header_row_idx}): {header_row[:10] if len(header_row) > 10 else header_row}")
-                print(f"  Found indices - Tran: {tran_index}, Vert: {vert_index}, Long: {long_index}, Geophone: {geophone_index}, Mic LMax: {mic_lmax_index}, Mic L10: {mic_l10_index}, Mic L90: {mic_l90_index}")
+                # CSV parsing successful - indices found
                 
                 # Process readings from row after header onwards
                 file_readings = []
@@ -1520,8 +1510,7 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
                     else:
                         rows_skipped_no_data += 1
                 
-                # Debug: Print processing stats
-                print(f"  Processed {rows_processed} rows: {len(file_readings)} readings, {rows_skipped_empty} empty, {rows_skipped_no_time} no time, {rows_skipped_no_data} no data")
+                # Processing complete for this file
                 
                 all_readings.extend(file_readings)
                 processed_files.append({
@@ -1532,7 +1521,6 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
         except Exception as e:
             error_msg = f'Error processing {os.path.basename(file_path)}: {str(e)}'
             errors.append(error_msg)
-            print(error_msg)
             continue
     
     # Sort all readings by Time
@@ -1541,9 +1529,9 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
     except Exception as e:
         print(f"Error sorting readings: {e}")
     
-    print(f"Processed {len(processed_files)} files, extracted {len(all_readings)} readings")
+    # CSV processing complete
     if errors:
-        print(f"Errors encountered: {errors}")
+        print(f"CSV processing errors: {len(errors)} error(s)")
     
     # Store total before filtering
     total_before_filter = len(all_readings)
@@ -1551,7 +1539,6 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
     # Apply date filtering if provided
     if from_datetime or to_datetime:
         filtered_readings = []
-        print(f"Applying date filters - from: {from_datetime}, to: {to_datetime}")
         
         # Parse filter dates
         from_dt = None
@@ -1587,10 +1574,9 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
                 if to_dt.tzinfo is None:
                     to_dt = est_tz.localize(to_dt)
             
-            print(f"Parsed date filters - from_dt: {from_dt}, to_dt: {to_dt}")
+            # Date filters parsed successfully
             
         except Exception as e:
-            print(f"Error parsing date filters: {e}")
             errors.append(f"Error parsing date filters: {e}")
             # Return all readings if date parsing fails
             return {
@@ -1628,12 +1614,11 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
                 
                 filtered_readings.append(reading)
             except Exception as e:
-                print(f"Error filtering reading with time {reading.get('Time', 'N/A')}: {e}")
                 # On error, include the reading to be safe
                 filtered_readings.append(reading)
                 continue
         
-        print(f"Date filtering complete: {total_before_filter} readings -> {len(filtered_readings)} readings")
+        # Date filtering complete
         all_readings = filtered_readings
     
     return {
