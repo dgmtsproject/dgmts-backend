@@ -1607,6 +1607,10 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
             }
         
         # Filter readings based on date range
+        # Convert filter datetimes to naive for comparison (all in EST)
+        from_dt_naive = from_dt.replace(tzinfo=None) if from_dt and from_dt.tzinfo else from_dt
+        to_dt_naive = to_dt.replace(tzinfo=None) if to_dt and to_dt.tzinfo else to_dt
+        
         for reading in all_readings:
             try:
                 time_str = reading.get('Time', '')
@@ -1615,18 +1619,18 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
                 
                 # Parse reading time (format: "2025-12-15 14:27:45" - no timezone, assume EST)
                 reading_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
-                # Assume EST for readings
-                reading_dt = est_tz.localize(reading_dt)
                 
-                # Check if reading falls within date range
-                if from_dt and reading_dt < from_dt:
+                # Compare naive datetimes (all assumed to be in EST)
+                if from_dt_naive and reading_dt < from_dt_naive:
                     continue
-                if to_dt and reading_dt > to_dt:
+                if to_dt_naive and reading_dt > to_dt_naive:
                     continue
                 
                 filtered_readings.append(reading)
             except Exception as e:
                 print(f"Error filtering reading with time {reading.get('Time', 'N/A')}: {e}")
+                # On error, include the reading to be safe
+                filtered_readings.append(reading)
                 continue
         
         print(f"Date filtering complete: {total_before_filter} readings -> {len(filtered_readings)} readings")
