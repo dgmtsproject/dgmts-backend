@@ -149,14 +149,7 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
         warning_value = instrument.get('warning_value')
         shutdown_value = instrument.get('shutdown_value')
         
-        # Print threshold values for debugging
-        print("=" * 80)
-        print("THRESHOLD VALUES:")
-        print("=" * 80)
-        print(f"Alert Value: {alert_value}")
-        print(f"Warning Value: {warning_value}")
-        print(f"Shutdown Value: {shutdown_value}")
-        print("=" * 80)
+        # Threshold values configured
         
         alert_emails = instrument.get('alert_emails') or []
         warning_emails = instrument.get('warning_emails') or []
@@ -265,9 +258,7 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
         # Sort readings by Time (oldest first) to process them chronologically
         sorted_readings = sorted(readings_in_window, key=lambda x: x.get('Time', ''))
         
-        print("=" * 80)
-        print(f"PROCESSING {len(sorted_readings)} READINGS FROM TIME WINDOW:")
-        print("=" * 80)
+        # Processing readings from time window
         
         # Check thresholds for each reading in the time window
         result_summary['total_readings_checked'] = len(sorted_readings)
@@ -278,9 +269,6 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
             transverse = abs(float(reading.get('Transverse', 0)))
             vertical = abs(float(reading.get('Vertical', 0)))
             
-            print(f"\nChecking reading: {timestamp_str}")
-            print(f"  Values - Longitudinal: {longitudinal:.6f}, Transverse: {transverse:.6f}, Vertical: {vertical:.6f}")
-        
             # Check if we've already sent for this timestamp (unless force_resend is True)
             if not force_resend:
                 try:
@@ -291,18 +279,12 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
                         .eq('timestamp', timestamp_str) \
                         .execute()
                     if already_sent.data:
-                        print(f"  ⏭️  SKIP: Alert already sent for this timestamp")
                         result_summary['readings_already_sent'] += 1
                         result_summary['skipped_timestamps'].append(timestamp_str)
                         continue
-                    else:
-                        print(f"  ✅ No alert sent yet - checking thresholds")
                 except Exception as e:
-                    print(f"  ⚠️  WARNING: Error checking sent_alerts table: {e}")
-                    print("     Proceeding with alert check anyway (at all cost)")
+                    print(f"⚠️  WARNING: Error checking sent_alerts table: {e}")
                     log_alert_event("ERROR", f"Error checking sent_alerts table for {timestamp_str}: {e}", 'Instantel 1')
-            else:
-                print(f"  Force resend enabled - checking even if already sent")
 
             messages = []
             threshold_exceeded = False
@@ -313,7 +295,6 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
                     msg = f"<b>Shutdown threshold reached on {axis_desc} axis:</b> {value:.6f}"
                     messages.append(msg)
                     threshold_exceeded = True
-                    print(f"  🔴 SHUTDOWN THRESHOLD EXCEEDED: {axis_desc} = {value:.6f} >= {shutdown_value}")
             
             # Check warning thresholds (medium priority)
             for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
@@ -321,7 +302,6 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
                     msg = f"<b>Warning threshold reached on {axis_desc} axis:</b> {value:.6f}"
                     messages.append(msg)
                     threshold_exceeded = True
-                    print(f"  🟡 WARNING THRESHOLD EXCEEDED: {axis_desc} = {value:.6f} >= {warning_value}")
             
             # Check alert thresholds (lowest priority)
             for axis, value, axis_desc in [('Longitudinal', longitudinal, 'Longitudinal'), ('Transverse', transverse, 'Transverse'), ('Vertical', vertical, 'Vertical')]:
@@ -329,10 +309,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
                     msg = f"<b>Alert threshold reached on {axis_desc} axis:</b> {value:.6f}"
                     messages.append(msg)
                     threshold_exceeded = True
-                    print(f"  🟠 ALERT THRESHOLD EXCEEDED: {axis_desc} = {value:.6f} >= {alert_value}")
             
             if threshold_exceeded:
-                print(f"  ✅ THRESHOLDS EXCEEDED - {len(messages)} alert(s) detected - WILL SEND ALERT")
                 result_summary['readings_with_alerts'] += 1
                 result_summary['alert_timestamps'].append(timestamp_str)
                 alerts_by_timestamp[timestamp_str] = {
@@ -344,19 +322,11 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
                         'Vertical': vertical
                     }
                 }
-            else:
-                print(f"  ℹ️  No thresholds exceeded")
         
-        print("=" * 80)
-        print(f"SUMMARY: Checked {len(sorted_readings)} readings, {len(alerts_by_timestamp)} with alerts, {result_summary['readings_already_sent']} already sent")
-        print("=" * 80)
+        # Alert checking complete
 
         # 6. Send email if there are alerts - AT ALL COST
         if alerts_by_timestamp:
-            print("=" * 80)
-            print("PREPARING TO SEND ALERT EMAIL...")
-            print("=" * 80)
-            
             # Get project information and instrument details for micromate from database
             project_name = "Lincoln Lewis Fairfax"  # Default fallback
             instrument_details = []
@@ -471,12 +441,12 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
         result_summary['error'] = str(e)
         return result_summary
 
-def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=360, force_resend=False):
+def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720, force_resend=False):
     """Check Instantel 2 (UM16368) alerts and send emails if thresholds are exceeded
     
     Args:
         custom_emails (list, optional): Custom email addresses to use instead of instrument emails
-        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 360 minutes (6 hours).
+        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 720 minutes (12 hours).
         force_resend (bool, optional): If True, will resend alerts even if they were already sent (for testing). Default is False.
     
     Returns:
