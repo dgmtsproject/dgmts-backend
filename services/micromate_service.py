@@ -101,10 +101,10 @@ def get_project_info(instrument_id):
         print(f"Error fetching project info for {instrument_id}: {e}")
         return None
 
-def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=1440, force_resend=False):
+def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, force_resend=False):
     """Check Instantel Micromate alerts and send emails if thresholds are exceeded
     
-    This function checks ALL readings from the last 24 hours (1 day) by default. This ensures
+    This function checks ALL readings from the last 6 hours by default. This ensures
     all readings in the time window are checked so no alerts are missed.
     
     For each reading:
@@ -471,12 +471,12 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=1440,
         result_summary['error'] = str(e)
         return result_summary
 
-def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440, force_resend=False):
+def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=360, force_resend=False):
     """Check Instantel 2 (UM16368) alerts and send emails if thresholds are exceeded
     
     Args:
         custom_emails (list, optional): Custom email addresses to use instead of instrument emails
-        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 1440 minutes (24 hours/1 day).
+        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 360 minutes (6 hours).
         force_resend (bool, optional): If True, will resend alerts even if they were already sent (for testing). Default is False.
     
     Returns:
@@ -524,14 +524,11 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440
             print(f"Using custom emails for test: {custom_emails}")
 
         # 2. Calculate time range for checking alerts
-        # Account for instrument clock being 1 hour behind EST
         utc_now = datetime.now(timezone.utc)
         est_tz = pytz.timezone('US/Eastern')
         now_est = utc_now.astimezone(est_tz)
-        # Subtract 1 hour to account for instrument clock being behind
-        now_instrument_time = now_est - timedelta(hours=1)
-        # Calculate start time based on time_window_minutes parameter
-        start_instrument_time = now_instrument_time - timedelta(minutes=time_window_minutes)
+        # Calculate start time based on time_window_minutes parameter (last 6 hours by default)
+        start_time = now_est - timedelta(minutes=time_window_minutes)
         
         # Format time window description
         if time_window_minutes >= 1440:  # 1 day or more
@@ -541,21 +538,14 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440
         else:
             time_window_desc = f"{time_window_minutes} minutes"
         
-        print(f"Checking Instantel 2 (UM16368) data from {start_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST (last {time_window_desc})")
-        print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
-        print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
-        print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
+        print(f"Checking Instantel 2 (UM16368) data from {start_time.strftime('%Y-%m-%dT%H:%M:%S')} to {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST (last {time_window_desc})")
 
         # 3. Fetch data from UM16368 API with date filtering
-        # For alerts, we want to check the latest entries from the last 1-2 days
-        # to ensure we don't miss any alerts and account for single day with latest entries
+        # Check last 6 hours to reduce the number of readings
         
-        # Calculate date range: Check last 2 days to ensure we get latest entries
-        two_days_ago = now_instrument_time - timedelta(days=2)
-        
-        # Format dates for API (YYYY-MM-DD format)
-        from_date = two_days_ago.strftime('%Y-%m-%d')
-        to_date = now_instrument_time.strftime('%Y-%m-%d')
+        # Format dates for API (YYYY-MM-DD HH:MM:SS format for more precise filtering)
+        from_date = start_time.strftime('%Y-%m-%d %H:%M:%S')
+        to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
         
         url = f"https://imsite.dullesgeotechnical.com/api/micromate/UM16368/readings?fromdatetime={from_date}&todatetime={to_date}"
         response = requests.get(url)
@@ -583,8 +573,8 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440
         alerts_by_timestamp = {}
         
         # Convert time window to UTC for comparison
-        start_utc = start_instrument_time.astimezone(timezone.utc)
-        now_utc = now_instrument_time.astimezone(timezone.utc)
+        start_utc = start_time.astimezone(timezone.utc)
+        now_utc = now_est.astimezone(timezone.utc)
         
         readings_in_window = []
         for reading in um16368_readings:
@@ -606,8 +596,8 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440
                 continue
         
         if not readings_in_window:
-            print(f"No UM16368 readings found in time window ({start_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} EST)")
-            log_alert_event("INFO", f"No UM16368 readings found in time window ({start_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_instrument_time.strftime('%Y-%m-%d %H:%M:%S')} EST)", 'Instantel 2')
+            print(f"No UM16368 readings found in time window ({start_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_est.strftime('%Y-%m-%d %H:%M:%S')} EST)")
+            log_alert_event("INFO", f"No UM16368 readings found in time window ({start_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_est.strftime('%Y-%m-%d %H:%M:%S')} EST)", 'Instantel 2')
             return result_summary
         
         print(f"Found {len(readings_in_window)} readings in time window")
