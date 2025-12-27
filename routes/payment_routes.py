@@ -5,6 +5,30 @@ import json
 import time
 import re
 
+def luhn_check(card_number):
+    """Validate credit card number using Luhn algorithm"""
+    card_number = card_number.replace(' ', '').replace('-', '')
+    if not card_number.isdigit():
+        return False
+    
+    def digits_of(n):
+        return [int(d) for d in str(n)]
+    
+    digits = digits_of(card_number)
+    odd_digits = digits[-1::-2]
+    even_digits = digits[-2::-2]
+    checksum = sum(odd_digits)
+    for d in even_digits:
+        checksum += sum(digits_of(d*2))
+    
+    return checksum % 10 == 0
+
+def sanitize_card_number(card_number):
+    """Mask card number for logging (show only last 4 digits)"""
+    if not card_number or len(card_number) < 4:
+        return "****"
+    return "****" + card_number[-4:]
+
 # Create Blueprint
 payment_bp = Blueprint('payment', __name__, url_prefix='/api')
 
@@ -51,6 +75,22 @@ def process_payment():
         except (ValueError, TypeError):
             return jsonify({
                 "error": "Invalid amount format",
+                "status": "error"
+            }), 400
+        
+        # Validate card number using Luhn algorithm
+        card_number = data['cardNumber'].replace(' ', '').replace('-', '')
+        if not luhn_check(card_number):
+            return jsonify({
+                "error": "Invalid card number",
+                "status": "error"
+            }), 400
+        
+        # Validate card code (CVV)
+        card_code = data.get('cardCode', '')
+        if not card_code or len(card_code) < 3 or len(card_code) > 4 or not card_code.isdigit():
+            return jsonify({
+                "error": "Invalid card code (CVV)",
                 "status": "error"
             }), 400
         
@@ -115,11 +155,18 @@ def process_payment():
         
         response = requests.post(api_url, json=payload, headers=headers, timeout=30)
         
-        # Debug: log response details
-        print(f"Response status: {response.status_code}")
-        print(f"Response headers: {dict(response.headers)}")
-        print(f"Response text length: {len(response.text)}")
-        print(f"Response text (first 500 chars): {response.text[:500]}")
+        # Log response (sanitized for production - no sensitive card data)
+        masked_card = sanitize_card_number(data['cardNumber'])
+        print(f"Payment request for card ending in {masked_card[-4:]}: Status {response.status_code}")
+        if not Config.AUTHORIZE_NET_SANDBOX:
+            # In production, only log minimal info
+            print(f"Production payment processed - Response code: {response.status_code}")
+        else:
+            # In sandbox, can log more details for debugging
+            print(f"Sandbox payment - Response status: {response.status_code}")
+            print(f"Response text length: {len(response.text)}")
+            if response.status_code != 200:
+                print(f"Response text (first 500 chars): {response.text[:500]}")
         
         if response.status_code != 200:
             return jsonify({

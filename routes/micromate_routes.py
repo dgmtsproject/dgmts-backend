@@ -618,10 +618,20 @@ def get_um16368_readings_endpoint():
     - Row 1 after PPV: Contains TIME in first column, column names (Tran, Vert, Long, Geophone), and units
     - Rows after header: Actual readings
     
+    Query Parameters:
+    - fromdatetime: Optional start date/datetime to filter readings (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
+    - todatetime: Optional end date/datetime to filter readings (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
+    
+    Example: /api/micromate/UM16368/readings?fromdatetime=2025-12-15&todatetime=2025-12-22
+    
     Each reading contains Time, source_file, and readings (key-value pairs).
     """
     try:
-        result = get_um16368_readings()
+        # Get query parameters for date filtering
+        from_datetime = request.args.get('fromdatetime')
+        to_datetime = request.args.get('todatetime')
+        
+        result = get_um16368_readings(from_datetime=from_datetime, to_datetime=to_datetime)
         
         if not result:
             return jsonify({
@@ -629,12 +639,23 @@ def get_um16368_readings_endpoint():
                 'message': 'No data could be retrieved from CSV files'
             }), 500
         
-        return jsonify({
+        response_data = {
             'UM16368Readings': result.get('readings', []),
             'summary': result.get('summary', {}),
             'processed_files': result.get('processed_files', []),
             'errors': result.get('errors', [])
-        }), 200
+        }
+        
+        # Add filter info to response if filters were applied
+        if from_datetime or to_datetime:
+            response_data['filters'] = {
+                'fromdatetime': from_datetime,
+                'todatetime': to_datetime,
+                'total_before_filter': result.get('total_before_filter', 0),
+                'total_after_filter': len(result.get('readings', []))
+            }
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
         return jsonify({

@@ -546,8 +546,21 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=10, 
         print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
         print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
 
-        # 3. Fetch data from UM16368 API
-        url = "https://imsite.dullesgeotechnical.com/api/micromate/UM16368/readings"
+        # 3. Fetch data from UM16368 API with date filtering
+        # For alerts, we want to check the latest entries from the last 1-2 days
+        # to ensure we don't miss any alerts and account for single day with latest entries
+        from datetime import datetime
+        
+        # Calculate date range: Check last 2 days to ensure we get latest entries
+        two_days_ago = now_instrument_time - timedelta(days=2)
+        
+        # Format dates for API (YYYY-MM-DD format)
+        from_date = two_days_ago.strftime('%Y-%m-%d')
+        to_date = now_instrument_time.strftime('%Y-%m-%d')
+        
+        print(f"Fetching UM16368 data from API with date filter: {from_date} to {to_date}")
+        
+        url = f"https://imsite.dullesgeotechnical.com/api/micromate/UM16368/readings?fromdatetime={from_date}&todatetime={to_date}"
         response = requests.get(url)
         if response.status_code != 200:
             print(f"Failed to fetch UM16368 data: {response.status_code} {response.text}")
@@ -557,6 +570,10 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=10, 
 
         data = response.json()
         um16368_readings = data.get('UM16368Readings', [])
+        
+        # Log filter info if available
+        if 'filters' in data:
+            print(f"API date filtering applied: {data['filters'].get('total_before_filter', 0)} -> {data['filters'].get('total_after_filter', 0)} readings")
         
         if not um16368_readings:
             print("No UM16368 data received")
@@ -1071,7 +1088,7 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
     
     return body
 
-def get_um16368_readings():
+def get_um16368_readings(from_datetime=None, to_datetime=None):
     """
     Parse CSV files from /root/root/ftp-server/Dulles Test/UM16368/CSV directory
     and extract readings dynamically by finding the header structure:
@@ -1081,6 +1098,10 @@ def get_um16368_readings():
     - That row should have "TIME" in the first column - this is the header row
     - The row with PPV contains column names or format indicators
     - Rows below the header row contain the actual readings
+    
+    Args:
+        from_datetime (str, optional): Start date/datetime to filter readings (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
+        to_datetime (str, optional): End date/datetime to filter readings (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
     
     Returns a list of readings with key-value pairs for each timestamp.
     """
@@ -1524,6 +1545,93 @@ def get_um16368_readings():
     if errors:
         print(f"Errors encountered: {errors}")
     
+    # Store total before filtering
+    total_before_filter = len(all_readings)
+    
+    # Apply date filtering if provided
+    if from_datetime or to_datetime:
+        filtered_readings = []
+        print(f"Applying date filters - from: {from_datetime}, to: {to_datetime}")
+        
+        # Parse filter dates
+        from_dt = None
+        to_dt = None
+        est_tz = pytz.timezone('US/Eastern')
+        
+        try:
+            if from_datetime:
+                # Parse from_datetime - support both date and datetime formats
+                if len(from_datetime) == 10:  # Date only (YYYY-MM-DD)
+                    from_dt = datetime.strptime(from_datetime, '%Y-%m-%d')
+                elif 'T' in from_datetime:  # ISO format
+                    from_dt = datetime.fromisoformat(from_datetime.replace('Z', '+00:00'))
+                else:  # Date with time (YYYY-MM-DD HH:MM:SS)
+                    from_dt = datetime.strptime(from_datetime, '%Y-%m-%d %H:%M:%S')
+                
+                # If naive (no timezone), assume EST
+                if from_dt.tzinfo is None:
+                    from_dt = est_tz.localize(from_dt)
+                
+            if to_datetime:
+                # Parse to_datetime - support both date and datetime formats
+                if len(to_datetime) == 10:  # Date only (YYYY-MM-DD)
+                    to_dt = datetime.strptime(to_datetime, '%Y-%m-%d')
+                    # For end date, set to end of day (23:59:59)
+                    to_dt = to_dt.replace(hour=23, minute=59, second=59)
+                elif 'T' in to_datetime:  # ISO format
+                    to_dt = datetime.fromisoformat(to_datetime.replace('Z', '+00:00'))
+                else:  # Date with time (YYYY-MM-DD HH:MM:SS)
+                    to_dt = datetime.strptime(to_datetime, '%Y-%m-%d %H:%M:%S')
+                
+                # If naive (no timezone), assume EST
+                if to_dt.tzinfo is None:
+                    to_dt = est_tz.localize(to_dt)
+            
+            print(f"Parsed date filters - from_dt: {from_dt}, to_dt: {to_dt}")
+            
+        except Exception as e:
+            print(f"Error parsing date filters: {e}")
+            errors.append(f"Error parsing date filters: {e}")
+            # Return all readings if date parsing fails
+            return {
+                'readings': all_readings,
+                'summary': {
+                    'total_readings': len(all_readings),
+                    'files_processed': len(processed_files),
+                    'files_found': len(csv_files),
+                    'errors_count': len(errors)
+                },
+                'processed_files': processed_files,
+                'errors': errors,
+                'total_before_filter': total_before_filter
+            }
+        
+        # Filter readings based on date range
+        for reading in all_readings:
+            try:
+                time_str = reading.get('Time', '')
+                if not time_str:
+                    continue
+                
+                # Parse reading time (format: "2025-12-15 14:27:45" - no timezone, assume EST)
+                reading_dt = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                # Assume EST for readings
+                reading_dt = est_tz.localize(reading_dt)
+                
+                # Check if reading falls within date range
+                if from_dt and reading_dt < from_dt:
+                    continue
+                if to_dt and reading_dt > to_dt:
+                    continue
+                
+                filtered_readings.append(reading)
+            except Exception as e:
+                print(f"Error filtering reading with time {reading.get('Time', 'N/A')}: {e}")
+                continue
+        
+        print(f"Date filtering complete: {total_before_filter} readings -> {len(filtered_readings)} readings")
+        all_readings = filtered_readings
+    
     return {
         'readings': all_readings,
         'summary': {
@@ -1533,6 +1641,7 @@ def get_um16368_readings():
             'errors_count': len(errors)
         },
         'processed_files': processed_files,
-        'errors': errors if errors else []
+        'errors': errors if errors else [],
+        'total_before_filter': total_before_filter
     }
 
