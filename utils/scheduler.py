@@ -17,7 +17,11 @@ def run_scheduler():
 def setup_scheduled_tasks():
     """Setup all scheduled tasks"""
     # Schedule to run every minute for real-time threshold checking
-    schedule.every().minute.do(fetch_and_store_all_sensor_data)
+    
+    # TILTMETER DATA FETCHING DISABLED - No data available for tiltmeter nodes
+    # To re-enable, uncomment the line below:
+    # schedule.every().minute.do(fetch_and_store_all_sensor_data)
+    
     schedule.every().minute.do(check_and_send_seismograph_alert)
     schedule.every().minute.do(check_and_send_smg3_seismograph_alert)
     schedule.every().minute.do(check_and_send_micromate_alert)
@@ -33,6 +37,7 @@ def setup_scheduled_tasks():
     # for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():
     #     schedule.every().minute.do(check_and_send_rock_seismograph_alert, instrument_id)
     
+    print("⚠️  TILTMETER DATA FETCHING DISABLED - No data for nodes")
     print("⚠️  ROCKSMG ALERTS DISABLED - Scheduler is turned off")
     
     # NOTE: Test scheduler (check_and_send_rock_seismograph_alert_test) is NOT scheduled in production

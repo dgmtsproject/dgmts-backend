@@ -101,12 +101,11 @@ def get_project_info(instrument_id):
         print(f"Error fetching project info for {instrument_id}: {e}")
         return None
 
-def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=30, force_resend=False):
+def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=1440, force_resend=False):
     """Check Instantel Micromate alerts and send emails if thresholds are exceeded
     
-    This function checks ALL readings from the last 30 minutes (default). Since readings are
-    inserted in batches every 30 minutes with 5-minute intervals, we need to check all readings
-    in the time window to ensure no alerts are missed.
+    This function checks ALL readings from the last 24 hours (1 day) by default. This ensures
+    all readings in the time window are checked so no alerts are missed.
     
     For each reading:
     - If thresholds are exceeded AND no alert has been sent for that timestamp, send an alert
@@ -177,7 +176,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=30, f
 
         # 2. Note: We'll filter readings based on their own timestamps, not system time
         # Get all readings first, then filter based on the most recent reading's timestamp
-        print(f"Will check readings from last {time_window_minutes} minutes based on reading timestamps")
+        time_window_desc = f"{time_window_minutes / 1440:.1f} days" if time_window_minutes >= 1440 else f"{time_window_minutes / 60:.1f} hours" if time_window_minutes >= 60 else f"{time_window_minutes} minutes"
+        print(f"Will check readings from last {time_window_desc} based on reading timestamps")
 
         # 3. Fetch data from Micromate API
         url = "https://imsite.dullesgeotechnical.com/api/micromate/readings"
@@ -471,12 +471,12 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=30, f
         result_summary['error'] = str(e)
         return result_summary
 
-def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=10, force_resend=False):
+def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440, force_resend=False):
     """Check Instantel 2 (UM16368) alerts and send emails if thresholds are exceeded
     
     Args:
         custom_emails (list, optional): Custom email addresses to use instead of instrument emails
-        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 10 minutes.
+        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 1440 minutes (24 hours/1 day).
         force_resend (bool, optional): If True, will resend alerts even if they were already sent (for testing). Default is False.
     
     Returns:
