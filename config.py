@@ -13,9 +13,13 @@ class Config:
     SESSION_COOKIE_SAMESITE = 'None'
     PERMANENT_SESSION_LIFETIME = 3600  # 1 hour
     
-    # Supabase Configuration
+    # Supabase Configuration (Main)
     SUPABASE_URL = os.getenv('SUPABASE_URL')
     SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+    
+    # DGMTS Static Supabase Configuration (for email_config and send-mail endpoint)
+    DGMTS_STATIC_SUPABASE_URL = os.getenv('DGMTS_STATIC_SUPABASE_URL')
+    DGMTS_STATIC_SUPABASE_KEY = os.getenv('DGMTS_STATIC_SUPABASE_KEY')
     
     # JWT Configuration
     JWT_SECRET = os.environ['FLASK_SECRET_KEY']

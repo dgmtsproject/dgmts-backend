@@ -72,19 +72,19 @@ def dgmts_static_send_mail():
         
         print(f'Email request received: type={email_type}, email={email}')
         
-        # Get email configurations from Supabase database
+        # Get email configurations from DGMTS Static Supabase database
         try:
             # Debug: Print Supabase connection info
-            print(f'Connecting to Supabase...')
-            print(f'Supabase URL: {Config.SUPABASE_URL}')
-            print(f'Supabase Key exists: {bool(Config.SUPABASE_KEY)}')
+            print(f'Connecting to DGMTS Static Supabase...')
+            print(f'DGMTS Static Supabase URL: {Config.DGMTS_STATIC_SUPABASE_URL}')
+            print(f'DGMTS Static Supabase Key exists: {bool(Config.DGMTS_STATIC_SUPABASE_KEY)}')
             
-            # Create a fresh Supabase client for this request
+            # Create Supabase client for DGMTS Static database (where email_config table exists)
             from supabase import create_client
-            supabase_client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+            dgmts_supabase = create_client(Config.DGMTS_STATIC_SUPABASE_URL, Config.DGMTS_STATIC_SUPABASE_KEY)
             
-            print('Querying email_config table...')
-            email_configs_resp = supabase_client.table('email_config').select('*').order('type').execute()
+            print('Querying email_config table from DGMTS Static Supabase...')
+            email_configs_resp = dgmts_supabase.table('email_config').select('*').order('type').execute()
             
             print(f'Query response data: {email_configs_resp.data}')
             
@@ -356,7 +356,7 @@ DGMTS Team
             subscriber_token = token
             
             if not subscriber_token:
-                subscriber_resp = supabase.table('subscribers').select('token').eq('email', email).execute()
+                subscriber_resp = dgmts_supabase.table('subscribers').select('token').eq('email', email).execute()
                 if subscriber_resp.data:
                     subscriber_token = subscriber_resp.data[0].get('token')
             
@@ -422,7 +422,7 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
             subscriber_token = token
             
             if not subscriber_token:
-                subscriber_resp = supabase.table('subscribers').select('token').eq('email', email).execute()
+                subscriber_resp = dgmts_supabase.table('subscribers').select('token').eq('email', email).execute()
                 if subscriber_resp.data:
                     subscriber_token = subscriber_resp.data[0].get('token')
             
