@@ -72,18 +72,22 @@ def dgmts_static_send_mail():
         
         print(f'Email request received: type={email_type}, email={email}')
         
-        # Get email configurations from database
-        email_configs_resp = supabase.table('email_config').select('*').order('type').execute()
-        
-        if not email_configs_resp.data:
-            return jsonify({'error': 'Email configuration not found. Please configure email settings in the admin panel.'}), 500
-        
-        # Separate primary and secondary configs
-        primary_config = next((c for c in email_configs_resp.data if c.get('type') == 'primary'), email_configs_resp.data[0])
-        secondary_config = next((c for c in email_configs_resp.data if c.get('type') == 'secondary'), None)
-        
-        if not primary_config or not primary_config.get('email_id') or not primary_config.get('email_password'):
-            return jsonify({'error': 'Primary email configuration is incomplete'}), 500
+        # Get email configurations from Supabase database
+        try:
+            email_configs_resp = supabase.table('email_config').select('*').order('type').execute()
+            
+            if not email_configs_resp.data:
+                return jsonify({'error': 'Email configuration not found. Please configure email settings in the admin panel.'}), 500
+            
+            # Separate primary and secondary configs
+            primary_config = next((c for c in email_configs_resp.data if c.get('type') == 'primary'), email_configs_resp.data[0])
+            secondary_config = next((c for c in email_configs_resp.data if c.get('type') == 'secondary'), None)
+            
+            if not primary_config or not primary_config.get('email_id') or not primary_config.get('email_password'):
+                return jsonify({'error': 'Primary email configuration is incomplete'}), 500
+                
+        except Exception as db_error:
+            return jsonify({'error': f'Failed to fetch email configuration from database: {str(db_error)}'}), 500
         
         # Helper function to get SMTP settings
         def get_smtp_settings(email_id):
