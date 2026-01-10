@@ -6,12 +6,557 @@ from supabase import create_client, Client
 from config import Config
 from datetime import datetime, timezone
 import pytz
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import requests
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
 # Create Blueprint
 email_bp = Blueprint('email', __name__, url_prefix='/api')
+
+@email_bp.route('/dgmts-static/send-mail', methods=['POST', 'OPTIONS'])
+def dgmts_static_send_mail():
+    """
+    Universal email sending endpoint - replicates Deno serverless function
+    
+    Supports multiple email types:
+    - test: Test email configuration
+    - payment: Payment confirmation emails
+    - newsletter: Newsletter welcome email
+    - subscriber_notification: Admin-sent newsletters/updates
+    - contact: Contact form submissions (default)
+    
+    Request body (JSON):
+    {
+        "type": "test|payment|newsletter|subscriber_notification|contact",
+        "name": "Sender Name",
+        "email": "recipient@example.com",
+        "message": "Email message content",
+        "subject": "Custom subject (optional)",
+        "htmlContent": "Custom HTML content (optional)",
+        "pdfUrl": "URL to PDF attachment (optional)",
+        "pdfFileName": "attachment.pdf (optional)",
+        "token": "Subscriber token (optional)",
+        "paymentData": {...} (for payment type)
+    }
+    """
+    # Handle OPTIONS for CORS
+    if request.method == 'OPTIONS':
+        return '', 200, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        }
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No request body provided'}), 400
+        
+        # Extract parameters
+        email_type = data.get('type', 'contact')
+        name = data.get('name')
+        email = data.get('email')
+        message = data.get('message')
+        subject = data.get('subject')
+        html_content = data.get('htmlContent')
+        pdf_url = data.get('pdfUrl')
+        pdf_filename = data.get('pdfFileName')
+        token = data.get('token')
+        payment_data = data.get('paymentData')
+        
+        print(f'Email request received: type={email_type}, email={email}')
+        
+        # Get email configurations from database
+        email_configs_resp = supabase.table('email_config').select('*').order('type').execute()
+        
+        if not email_configs_resp.data:
+            return jsonify({'error': 'Email configuration not found. Please configure email settings in the admin panel.'}), 500
+        
+        # Separate primary and secondary configs
+        primary_config = next((c for c in email_configs_resp.data if c.get('type') == 'primary'), email_configs_resp.data[0])
+        secondary_config = next((c for c in email_configs_resp.data if c.get('type') == 'secondary'), None)
+        
+        if not primary_config or not primary_config.get('email_id') or not primary_config.get('email_password'):
+            return jsonify({'error': 'Primary email configuration is incomplete'}), 500
+        
+        # Helper function to get SMTP settings
+        def get_smtp_settings(email_id):
+            email_lower = email_id.lower()
+            if '@gmail.com' in email_lower:
+                return {'host': 'smtp.gmail.com', 'port': 587}
+            elif any(domain in email_lower for domain in ['@outlook.com', '@hotmail.com', '@live.com', 'dullesgeotechnical.com']):
+                return {'host': 'smtp.office365.com', 'port': 587}
+            else:
+                return {'host': 'smtp.office365.com', 'port': 587}
+        
+        # Get primary SMTP settings
+        primary_smtp = get_smtp_settings(primary_config['email_id'])
+        from_email_name = primary_config.get('from_email_name', 'DGMTS').strip()
+        
+        # BCC and admin emails
+        bcc_emails = ["iaziz@dullesgeotechnical.com", "info@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com"]
+        payment_cc_emails = ["dgmts.project@gmail.com"]
+        
+        # Function to send email with fallback
+        def send_email_with_fallback(mail_options, config_to_use=None):
+            config = config_to_use or primary_config
+            smtp_settings = get_smtp_settings(config['email_id'])
+            
+            try:
+                print(f"Attempting to send email using {config.get('type', 'primary')} config ({config['email_id']})...")
+                
+                # Create message
+                msg = MIMEMultipart('alternative')
+                msg['From'] = mail_options['from']
+                msg['To'] = mail_options['to'] if isinstance(mail_options['to'], str) else ', '.join(mail_options['to'])
+                msg['Subject'] = mail_options['subject']
+                
+                # Add BCC if present
+                if 'bcc' in mail_options:
+                    msg['Bcc'] = ', '.join(mail_options['bcc']) if isinstance(mail_options['bcc'], list) else mail_options['bcc']
+                
+                # Add Reply-To if present
+                if 'reply_to' in mail_options:
+                    msg['Reply-To'] = mail_options['reply_to']
+                
+                # Add text and HTML parts
+                if 'text' in mail_options:
+                    msg.attach(MIMEText(mail_options['text'], 'plain'))
+                if 'html' in mail_options:
+                    msg.attach(MIMEText(mail_options['html'], 'html'))
+                
+                # Add PDF attachment if present
+                if 'pdf_data' in mail_options and 'pdf_filename' in mail_options:
+                    part = MIMEBase('application', 'pdf')
+                    part.set_payload(mail_options['pdf_data'])
+                    encoders.encode_base64(part)
+                    part.add_header('Content-Disposition', f'attachment; filename={mail_options["pdf_filename"]}')
+                    msg.attach(part)
+                
+                # Connect and send
+                server = smtplib.SMTP(smtp_settings['host'], smtp_settings['port'])
+                server.starttls()
+                server.login(config['email_id'].strip(), config['email_password'].strip())
+                
+                # Get all recipients
+                recipients = []
+                if isinstance(mail_options['to'], list):
+                    recipients.extend(mail_options['to'])
+                else:
+                    recipients.append(mail_options['to'])
+                if 'bcc' in mail_options:
+                    if isinstance(mail_options['bcc'], list):
+                        recipients.extend(mail_options['bcc'])
+                    else:
+                        recipients.append(mail_options['bcc'])
+                
+                server.sendmail(config['email_id'], recipients, msg.as_string())
+                server.quit()
+                
+                print(f"Email sent successfully using {config.get('type', 'primary')} config")
+                return {'success': True, 'used_config': config.get('type', 'primary')}
+                
+            except smtplib.SMTPAuthenticationError as e:
+                print(f"SMTP Authentication failed: {e}")
+                
+                # Try secondary config if available
+                if secondary_config and config == primary_config:
+                    print(f"Attempting secondary config ({secondary_config['email_id']})...")
+                    return send_email_with_fallback(mail_options, secondary_config)
+                else:
+                    raise Exception(f"Email authentication failed: {str(e)}")
+                    
+            except Exception as e:
+                print(f"Email send failed: {e}")
+                raise
+        
+        # Build mail options based on type
+        mail_options = {}
+        
+        if email_type == 'test':
+            # Test email
+            if not email:
+                return jsonify({'error': 'Missing required field: email'}), 400
+            
+            mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': email,
+                'subject': 'Test Email from DGMTS Email Configuration',
+                'text': 'TEST EMAIL FROM DGMTS\n\nThis is a test email. If you received this, your email configuration is working correctly!',
+                'html': '''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }
+        .header { background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%); color: white; padding: 30px; text-align: center; }
+        .content { padding: 30px; background: #f9f9f9; }
+        .success-box { background: white; padding: 25px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745; }
+        .footer { background: #333; color: white; padding: 15px; text-align: center; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>✅ Test Email Successful!</h1>
+        <p>DGMTS Email Configuration</p>
+    </div>
+    <div class="content">
+        <div class="success-box">
+            <h2 style="margin-top: 0; color: #28a745;">Email Configuration Working</h2>
+            <p>If you received this email, your email configuration is working correctly!</p>
+        </div>
+        <p>Best regards,<br><strong>DGMTS Email System</strong></p>
+    </div>
+    <div class="footer">
+        <p>This is an automated test email from the DGMTS email configuration system.</p>
+    </div>
+</body>
+</html>
+                '''
+            }
+            
+        elif email_type == 'payment':
+            # Payment confirmation email
+            if not payment_data or not email:
+                return jsonify({'error': 'Missing required fields for payment email: paymentData and email'}), 400
+            
+            customer_name = payment_data.get('customerName', 'Valued Customer')
+            customer_email = payment_data.get('customerEmail', email)
+            customer_address = payment_data.get('customerAddress', '')
+            invoice_no = payment_data.get('invoiceNo', 'N/A')
+            payment_note = payment_data.get('paymentNote', '')
+            transaction_id = payment_data.get('transactionId', 'N/A')
+            amount = float(payment_data.get('amount', 0))
+            invoice_amount = float(payment_data.get('invoiceAmount', 0))
+            service_charge = float(payment_data.get('serviceCharge', 0))
+            payment_method = payment_data.get('paymentMethod', 'Credit Card')
+            
+            formatted_amount = f"${amount:,.2f}"
+            formatted_invoice_amount = f"${invoice_amount:,.2f}"
+            formatted_service_charge = f"${service_charge:,.2f}"
+            payment_date = datetime.now().strftime('%B %d, %Y')
+            
+            # Customer email
+            mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': customer_email,
+                'bcc': payment_cc_emails,
+                'subject': f"✅ Payment Confirmation - Invoice #{invoice_no}",
+                'text': f'''
+PAYMENT CONFIRMATION
+
+Dear {customer_name},
+
+Thank you for your Payment. Your transaction has been processed successfully.
+
+TRANSACTION DETAILS:
+- Transaction ID: {transaction_id}
+- Invoice Number: {invoice_no}
+- Payment Method: {payment_method}
+- Payment Date: {payment_date}
+
+PAYMENT SUMMARY:
+- Invoice Amount: {formatted_invoice_amount}
+- Service Charge: {formatted_service_charge}
+- Total Amount Paid: {formatted_amount}
+
+{f"PAYMENT NOTE:\\n{payment_note}\\n" if payment_note else ""}
+
+Best regards,
+DGMTS Team
+                ''',
+                'html': f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }}
+        .header {{ background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 30px; text-align: center; }}
+        .content {{ padding: 30px; background: #f9f9f9; }}
+        .success-box {{ background: white; padding: 25px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #28a745; }}
+        .details-box {{ background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }}
+        .summary-box {{ background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; border: 2px solid #28a745; }}
+        .footer {{ background: #333; color: white; padding: 15px; text-align: center; font-size: 12px; }}
+        .label {{ font-weight: bold; color: #2795d0; }}
+        .amount {{ font-size: 1.2em; font-weight: bold; color: #28a745; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>✅ Payment Confirmation</h1>
+        <p>Thank You for Your Payment</p>
+    </div>
+    <div class="content">
+        <p>Dear <strong>{customer_name}</strong>,</p>
+        <p>Thank you for your Payment. Your transaction has been processed successfully.</p>
+        <div class="success-box">
+            <h2 style="margin-top: 0; color: #28a745;">Payment Processed</h2>
+            <p>Your payment has been processed. Please keep this email for your records.</p>
+        </div>
+        <div class="details-box">
+            <h3>Transaction Details</h3>
+            <p><span class="label">Transaction ID:</span> {transaction_id}</p>
+            <p><span class="label">Invoice Number:</span> {invoice_no}</p>
+            <p><span class="label">Payment Method:</span> {payment_method}</p>
+            <p><span class="label">Payment Date:</span> {payment_date}</p>
+        </div>
+        <div class="summary-box">
+            <h3 style="color: #28a745; margin-top: 0;">Payment Summary</h3>
+            <p><span class="label">Invoice Amount:</span> {formatted_invoice_amount}</p>
+            <p><span class="label">Service Charge:</span> {formatted_service_charge}</p>
+            <hr>
+            <p><span class="label">Total Amount Paid:</span> <span class="amount">{formatted_amount}</span></p>
+        </div>
+        <p>Best regards,<br><strong>DGMTS Team</strong></p>
+    </div>
+    <div class="footer">
+        <p>This is an automated payment confirmation from DGMTS.</p>
+    </div>
+</body>
+</html>
+                '''
+            }
+            
+        elif email_type == 'newsletter':
+            # Newsletter subscription welcome email
+            if not email:
+                return jsonify({'error': 'Missing required field: email'}), 400
+            
+            subscriber_name = name or email.split('@')[0]
+            subscriber_token = token
+            
+            if not subscriber_token:
+                subscriber_resp = supabase.table('subscribers').select('token').eq('email', email).execute()
+                if subscriber_resp.data:
+                    subscriber_token = subscriber_resp.data[0].get('token')
+            
+            unsubscribe_url = f"https://dullesgeotechnical.com/unsubscribe?token={subscriber_token}" if subscriber_token else f"https://dullesgeotechnical.com/unsubscribe?email={email}"
+            
+            mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': email,
+                'bcc': bcc_emails,
+                'subject': '🎉 Welcome to DGMTS Newsletter!',
+                'text': f'''
+WELCOME TO DGMTS NEWSLETTER
+
+Dear {subscriber_name},
+
+Thank you for subscribing to the DGMTS newsletter! We're excited to have you join our community.
+
+Best regards,
+The DGMTS Team
+
+---
+You can unsubscribe at any time by visiting: {unsubscribe_url}
+                ''',
+                'html': f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }}
+        .header {{ background: linear-gradient(135deg, #2795d0 0%, #28a745 100%); color: white; padding: 30px; text-align: center; }}
+        .content {{ padding: 30px; background: #f9f9f9; }}
+        .welcome-box {{ background: white; padding: 25px; border-radius: 8px; margin: 20px 0; }}
+        .footer {{ background: #333; color: white; padding: 15px; text-align: center; font-size: 12px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎉 Welcome to DGMTS Newsletter!</h1>
+        <p>Thank You for Subscribing</p>
+    </div>
+    <div class="content">
+        <p>Dear <strong>{subscriber_name}</strong>,</p>
+        <p>Thank you for subscribing to the DGMTS newsletter!</p>
+        <p>Best regards,<br><strong>The DGMTS Team</strong></p>
+    </div>
+    <div class="footer">
+        <p>This email was sent to {email} because you subscribed to our newsletter.</p>
+        <p><a href="{unsubscribe_url}" style="color: #4a90e2;">Unsubscribe</a></p>
+    </div>
+</body>
+</html>
+                '''
+            }
+            
+        elif email_type == 'subscriber_notification':
+            # Admin-sent newsletter/update
+            if not email or not message:
+                return jsonify({'error': 'Missing required fields: email and message'}), 400
+            
+            subscriber_name = name or email.split('@')[0]
+            email_subject = subject or '📢 Important Update from DGMTS'
+            subscriber_token = token
+            
+            if not subscriber_token:
+                subscriber_resp = supabase.table('subscribers').select('token').eq('email', email).execute()
+                if subscriber_resp.data:
+                    subscriber_token = subscriber_resp.data[0].get('token')
+            
+            unsubscribe_url = f"https://dullesgeotechnical.com/unsubscribe?token={subscriber_token}" if subscriber_token else f"https://dullesgeotechnical.com/unsubscribe?email={email}"
+            
+            # Check if complete HTML document
+            is_complete_html = html_content and (html_content.strip().lower().startswith('<!doctype') or html_content.strip().lower().startswith('<html'))
+            
+            if is_complete_html:
+                # Inject unsubscribe footer
+                unsubscribe_footer = f'''
+<div style="text-align: center; padding: 20px; margin-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666;">
+    <p>This email was sent to {email} because you are subscribed to our newsletter.</p>
+    <p><a href="{unsubscribe_url}" style="color: #4a90e2;">Unsubscribe</a></p>
+</div>
+                '''
+                if '</body>' in html_content.lower():
+                    html_body = html_content.replace('</body>', unsubscribe_footer + '</body>')
+                else:
+                    html_body = html_content + unsubscribe_footer
+            else:
+                # Use template wrapper
+                html_body = f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }}
+        .header {{ background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%); color: white; padding: 40px 30px; text-align: center; }}
+        .content {{ padding: 40px 30px; background: #ffffff; }}
+        .footer {{ background: #2c3e50; color: white; padding: 25px; text-align: center; font-size: 12px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📰 DGMTS Newsletter</h1>
+    </div>
+    <div class="content">
+        <p>Dear <strong>{subscriber_name}</strong>,</p>
+        <div>{html_content or message.replace(chr(10), '<br>')}</div>
+        <p>Best regards,<br><strong>The DGMTS Team</strong></p>
+    </div>
+    <div class="footer">
+        <p>This email was sent to {email} because you are subscribed to our newsletter.</p>
+        <p><a href="{unsubscribe_url}" style="color: #4a90e2;">Unsubscribe</a></p>
+    </div>
+</body>
+</html>
+                '''
+            
+            mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': email,
+                'subject': email_subject,
+                'text': f'{email_subject}\n\n{message}\n\nBest regards,\nThe DGMTS Team',
+                'html': html_body
+            }
+            
+            # Add PDF attachment if provided
+            if pdf_url and pdf_filename:
+                try:
+                    pdf_response = requests.get(pdf_url, timeout=10)
+                    if pdf_response.status_code == 200:
+                        mail_options['pdf_data'] = pdf_response.content
+                        mail_options['pdf_filename'] = pdf_filename
+                except Exception as e:
+                    print(f'Error fetching PDF attachment: {e}')
+        
+        else:
+            # Contact form (default)
+            if not name or not email or not message:
+                return jsonify({'error': 'Missing required fields: name, email, message'}), 400
+            
+            mail_options = {
+                'from': f"{from_email_name} Contact Form <{primary_config['email_id']}>",
+                'to': 'info@dullesgeotechnical.com',
+                'bcc': bcc_emails,
+                'reply_to': email,
+                'subject': f"🔔 New Contact Form Submission from {name}",
+                'text': f'''
+NEW CONTACT FORM SUBMISSION
+
+You have received a new message through your website contact form.
+
+SENDER DETAILS:
+Name: {name}
+Email: {email}
+
+MESSAGE:
+{message}
+
+---
+Reply directly to this email to respond to {name}.
+                ''',
+                'html': f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }}
+        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; }}
+        .content {{ padding: 30px; background: #f9f9f9; }}
+        .sender-info {{ background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }}
+        .footer {{ background: #333; color: white; padding: 15px; text-align: center; font-size: 12px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔔 New Contact Form Submission</h1>
+        <p>DGMTS Website</p>
+    </div>
+    <div class="content">
+        <div class="sender-info">
+            <h3>👤 Sender Information</h3>
+            <p><strong>Name:</strong> {name}</p>
+            <p><strong>Email:</strong> {email}</p>
+        </div>
+        <div class="sender-info">
+            <h3>💬 Message</h3>
+            <p>{message.replace(chr(10), '<br>')}</p>
+        </div>
+    </div>
+    <div class="footer">
+        <p>This email was automatically generated from your DGMTS website contact form.</p>
+    </div>
+</body>
+</html>
+                '''
+            }
+        
+        # Send email with fallback
+        result = send_email_with_fallback(mail_options)
+        
+        return jsonify({
+            'message': 'Email sent successfully',
+            'config_used': result['used_config']
+        }), 200, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        }
+        
+    except Exception as e:
+        print(f'Error in send-mail function: {e}')
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'message': str(e),
+            'error': str(e)
+        }), 500, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        }
 
 @email_bp.route('/test-email', methods=['POST'])
 def test_email():
