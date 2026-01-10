@@ -851,3 +851,170 @@ def check_connection_lost():
         import traceback
         traceback.print_exc()
         return jsonify({"error": f"Failed to check connection lost alerts: {str(e)}"}), 500
+
+@email_bp.route('/test-dullesgeotechnical-mail', methods=['POST'])
+def test_dullesgeotechnical_mail():
+    """
+    Test email endpoint with custom SMTP credentials
+    
+    Request body (JSON):
+    {
+        "provider_email": "your-email@gmail.com",
+        "app_password": "your-app-password",
+        "recipient_email": "recipient@example.com",
+        "from_name": "Dulles Geotechnical"
+    }
+    """
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        
+        # Get request data
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'error': 'No request body provided',
+                'message': 'Please provide provider_email, app_password, recipient_email, and from_name'
+            }), 400
+        
+        provider_email = data.get('provider_email')
+        app_password = data.get('app_password')
+        recipient_email = data.get('recipient_email')
+        from_name = data.get('from_name', 'Dulles Geotechnical')
+        
+        # Validate required fields
+        if not provider_email:
+            return jsonify({'error': 'provider_email is required'}), 400
+        if not app_password:
+            return jsonify({'error': 'app_password is required'}), 400
+        if not recipient_email:
+            return jsonify({'error': 'recipient_email is required'}), 400
+        
+        # Create test email
+        msg = MIMEMultipart()
+        msg['From'] = f"{from_name} <{provider_email}>"
+        msg['To'] = recipient_email
+        msg['Subject'] = "Test Email - Dulles Geotechnical Monitoring System"
+        
+        # Email body
+        body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }}
+                .container {{ max-width: 600px; margin: 0 auto; background-color: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }}
+                .header {{ background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 30px 20px; text-align: center; }}
+                .header h1 {{ margin: 0; font-size: 28px; font-weight: bold; }}
+                .header p {{ margin: 10px 0 0 0; opacity: 0.9; font-size: 14px; }}
+                .content {{ padding: 30px; }}
+                .content h2 {{ color: #0056d2; margin-top: 0; }}
+                .content p {{ line-height: 1.6; color: #495057; }}
+                .info-box {{ background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin: 20px 0; }}
+                .info-box p {{ margin: 5px 0; color: #0056d2; }}
+                .success-badge {{ display: inline-block; background-color: #28a745; color: white; padding: 5px 15px; border-radius: 20px; font-size: 14px; font-weight: bold; }}
+                .footer {{ background-color: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }}
+                .footer p {{ margin: 5px 0; font-size: 12px; }}
+                .company-info {{ font-weight: bold; color: #0056d2; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>✅ Test Email Successful!</h1>
+                    <p>Dulles Geotechnical Monitoring System</p>
+                </div>
+                
+                <div class="content">
+                    <p><span class="success-badge">✓ SUCCESS</span></p>
+                    
+                    <h2>Email Configuration Test</h2>
+                    <p>Congratulations! Your email configuration is working correctly.</p>
+                    <p>This test email was sent successfully from the Dulles Geotechnical Monitoring System.</p>
+                    
+                    <div class="info-box">
+                        <p><strong>Test Details:</strong></p>
+                        <p>📧 <strong>From:</strong> {from_name}</p>
+                        <p>📬 <strong>Sender Email:</strong> {provider_email}</p>
+                        <p>📨 <strong>Recipient:</strong> {recipient_email}</p>
+                        <p>🕒 <strong>Sent At:</strong> {datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d %I:%M:%S %p EST')}</p>
+                    </div>
+                    
+                    <p>If you received this email, your SMTP configuration is set up correctly and ready to send alert notifications.</p>
+                    
+                    <p style="color: #28a745; font-weight: bold;">✓ Email system is operational</p>
+                </div>
+                
+                <div class="footer">
+                    <p><span class="company-info">Dulles Geotechnical</span> | Instrumentation Monitoring System</p>
+                    <p>This is a test message to verify email functionality.</p>
+                    <p>Please do not reply to this email.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        msg.attach(MIMEText(body, 'html'))
+        
+        print(f"Attempting to send test email...")
+        print(f"From: {provider_email}")
+        print(f"To: {recipient_email}")
+        print(f"From Name: {from_name}")
+        
+        # Connect to Gmail SMTP server
+        smtp_server = "smtp.gmail.com"
+        smtp_port = 465
+        
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+        print("SMTP SSL connection established")
+        
+        # Login with provided credentials
+        server.login(provider_email, app_password)
+        print("Login successful")
+        
+        # Send email
+        server.sendmail(provider_email, recipient_email, msg.as_string())
+        print("Email sent successfully")
+        
+        server.quit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Test email sent successfully!',
+            'details': {
+                'from': f"{from_name} <{provider_email}>",
+                'to': recipient_email,
+                'subject': 'Test Email - Dulles Geotechnical Monitoring System',
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            }
+        }), 200
+        
+    except smtplib.SMTPAuthenticationError as e:
+        print(f'SMTP Authentication Error: {e}')
+        return jsonify({
+            'success': False,
+            'error': 'SMTP Authentication Error',
+            'message': 'Failed to authenticate with the email server. Please check your email and app password.',
+            'details': str(e)
+        }), 401
+        
+    except smtplib.SMTPException as e:
+        print(f'SMTP Error: {e}')
+        return jsonify({
+            'success': False,
+            'error': 'SMTP Error',
+            'message': 'An error occurred while sending the email.',
+            'details': str(e)
+        }), 500
+        
+    except Exception as e:
+        print(f'Failed to send test email: {e}')
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': 'Failed to send test email',
+            'message': str(e)
+        }), 500
