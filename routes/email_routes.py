@@ -74,7 +74,19 @@ def dgmts_static_send_mail():
         
         # Get email configurations from Supabase database
         try:
-            email_configs_resp = supabase.table('email_config').select('*').order('type').execute()
+            # Debug: Print Supabase connection info
+            print(f'Connecting to Supabase...')
+            print(f'Supabase URL: {Config.SUPABASE_URL}')
+            print(f'Supabase Key exists: {bool(Config.SUPABASE_KEY)}')
+            
+            # Create a fresh Supabase client for this request
+            from supabase import create_client
+            supabase_client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+            
+            print('Querying email_config table...')
+            email_configs_resp = supabase_client.table('email_config').select('*').order('type').execute()
+            
+            print(f'Query response data: {email_configs_resp.data}')
             
             if not email_configs_resp.data:
                 return jsonify({'error': 'Email configuration not found. Please configure email settings in the admin panel.'}), 500
@@ -83,10 +95,16 @@ def dgmts_static_send_mail():
             primary_config = next((c for c in email_configs_resp.data if c.get('type') == 'primary'), email_configs_resp.data[0])
             secondary_config = next((c for c in email_configs_resp.data if c.get('type') == 'secondary'), None)
             
+            print(f'Primary config found: {primary_config.get("email_id") if primary_config else "None"}')
+            print(f'Secondary config found: {secondary_config.get("email_id") if secondary_config else "None"}')
+            
             if not primary_config or not primary_config.get('email_id') or not primary_config.get('email_password'):
                 return jsonify({'error': 'Primary email configuration is incomplete'}), 500
                 
         except Exception as db_error:
+            import traceback
+            print(f'Database error: {db_error}')
+            traceback.print_exc()
             return jsonify({'error': f'Failed to fetch email configuration from database: {str(db_error)}'}), 500
         
         # Helper function to get SMTP settings
