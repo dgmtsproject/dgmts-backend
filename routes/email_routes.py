@@ -39,9 +39,10 @@ def dgmts_static_send_mail():
         "message": "Email message content",
         "subject": "Custom subject (optional)",
         "htmlContent": "Custom HTML content (optional)",
-        "pdfUrl": "URL to PDF attachment (optional)",
-        "pdfFileName": "attachment.pdf (optional)",
+        "attachments": [{name, url/data, type, size}] (optional),
+        "embeddedImages": [{cid, name, data, type}] (optional for CID images),
         "token": "Subscriber token (optional)",
+        "includeHeaderFooter": true/false (optional),
         "paymentData": {...} (for payment type)
     }
     """
@@ -65,9 +66,10 @@ def dgmts_static_send_mail():
         message = data.get('message')
         subject = data.get('subject')
         html_content = data.get('htmlContent')
-        pdf_url = data.get('pdfUrl')
-        pdf_filename = data.get('pdfFileName')
+        attachments = data.get('attachments')  # New: array of attachments
+        embedded_images = data.get('embeddedImages')  # New: CID embedded images
         token = data.get('token')
+        include_header_footer = data.get('includeHeaderFooter', False)  # New: header/footer toggle
         payment_data = data.get('paymentData')
         
         print(f'Email request received: type={email_type}, email={email}')
@@ -133,8 +135,18 @@ def dgmts_static_send_mail():
             try:
                 print(f"Attempting to send email using {config.get('type', 'primary')} config ({config['email_id']})...")
                 
-                # Create message
-                msg = MIMEMultipart('alternative')
+                # Check if we have embedded images - use 'related' for CID images
+                has_embedded_images = 'embedded_images' in mail_options and mail_options['embedded_images']
+                
+                if has_embedded_images:
+                    # Create multipart/related message for embedded images
+                    msg = MIMEMultipart('related')
+                    msg_alternative = MIMEMultipart('alternative')
+                    msg.attach(msg_alternative)
+                else:
+                    msg = MIMEMultipart('alternative')
+                    msg_alternative = msg
+                
                 msg['From'] = mail_options['from']
                 msg['To'] = mail_options['to'] if isinstance(mail_options['to'], str) else ', '.join(mail_options['to'])
                 msg['Subject'] = mail_options['subject']
@@ -149,17 +161,70 @@ def dgmts_static_send_mail():
                 
                 # Add text and HTML parts
                 if 'text' in mail_options:
-                    msg.attach(MIMEText(mail_options['text'], 'plain'))
+                    msg_alternative.attach(MIMEText(mail_options['text'], 'plain'))
                 if 'html' in mail_options:
-                    msg.attach(MIMEText(mail_options['html'], 'html'))
+                    msg_alternative.attach(MIMEText(mail_options['html'], 'html'))
                 
-                # Add PDF attachment if present
-                if 'pdf_data' in mail_options and 'pdf_filename' in mail_options:
-                    part = MIMEBase('application', 'pdf')
-                    part.set_payload(mail_options['pdf_data'])
-                    encoders.encode_base64(part)
-                    part.add_header('Content-Disposition', f'attachment; filename={mail_options["pdf_filename"]}')
-                    msg.attach(part)
+                # Add embedded images with CID
+                if has_embedded_images:
+                    import base64
+                    for img in mail_options['embedded_images']:
+                        try:
+                            # Get base64 data (remove data URL prefix if present)
+                            img_data = img.get('data', '')
+                            if ',' in img_data:
+                                img_data = img_data.split(',')[1]
+                            
+                            # Determine MIME type
+                            img_type = img.get('type', 'image/png')
+                            maintype, subtype = img_type.split('/')
+                            
+                            img_part = MIMEBase(maintype, subtype)
+                            img_part.set_payload(base64.b64decode(img_data))
+                            encoders.encode_base64(img_part)
+                            img_part.add_header('Content-ID', f'<{img.get("cid")}>')
+                            img_part.add_header('Content-Disposition', 'inline', filename=img.get('name', 'image.png'))
+                            msg.attach(img_part)
+                        except Exception as img_err:
+                            print(f"Error adding embedded image: {img_err}")
+                
+                # Add attachments (supports multiple file types)
+                if 'attachments' in mail_options and mail_options['attachments']:
+                    import base64
+                    for attachment in mail_options['attachments']:
+                        try:
+                            attachment_data = None
+                            
+                            # Get attachment data from URL or base64
+                            if attachment.get('url'):
+                                try:
+                                    response = requests.get(attachment['url'], timeout=10)
+                                    if response.status_code == 200:
+                                        attachment_data = response.content
+                                except Exception as url_err:
+                                    print(f"Error fetching attachment URL: {url_err}")
+                            elif attachment.get('data'):
+                                # Base64 data
+                                data_str = attachment['data']
+                                if ',' in data_str:
+                                    data_str = data_str.split(',')[1]
+                                attachment_data = base64.b64decode(data_str)
+                            
+                            if attachment_data:
+                                # Determine MIME type
+                                mime_type = attachment.get('type', 'application/octet-stream')
+                                if '/' in mime_type:
+                                    maintype, subtype = mime_type.split('/', 1)
+                                else:
+                                    maintype, subtype = 'application', 'octet-stream'
+                                
+                                part = MIMEBase(maintype, subtype)
+                                part.set_payload(attachment_data)
+                                encoders.encode_base64(part)
+                                part.add_header('Content-Disposition', 'attachment', filename=attachment.get('name', 'attachment'))
+                                msg.attach(part)
+                        except Exception as att_err:
+                            print(f"Error adding attachment: {att_err}")
                 
                 # Connect and send
                 server = smtplib.SMTP(smtp_settings['host'], smtp_settings['port'])
@@ -431,6 +496,9 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
             # Check if complete HTML document
             is_complete_html = html_content and (html_content.strip().lower().startswith('<!doctype') or html_content.strip().lower().startswith('<html'))
             
+            # Determine if we should use header/footer template
+            use_template = include_header_footer and not is_complete_html
+            
             if is_complete_html:
                 # Inject unsubscribe footer
                 unsubscribe_footer = f'''
@@ -443,8 +511,8 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
                     html_body = html_content.replace('</body>', unsubscribe_footer + '</body>')
                 else:
                     html_body = html_content + unsubscribe_footer
-            else:
-                # Use template wrapper
+            elif use_template:
+                # Use DGMTS template wrapper with header and footer
                 html_body = f'''
 <!DOCTYPE html>
 <html>
@@ -473,6 +541,31 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
 </body>
 </html>
                 '''
+            else:
+                # No template - send content as-is with just unsubscribe footer
+                content_html = html_content or message.replace(chr(10), '<br>')
+                unsubscribe_footer = f'''
+<div style="text-align: center; padding: 20px; margin-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666;">
+    <p>This email was sent to {email} because you are subscribed to our newsletter.</p>
+    <p><a href="{unsubscribe_url}" style="color: #4a90e2;">Unsubscribe</a></p>
+</div>
+                '''
+                html_body = f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }}
+        img {{ max-width: 100%; height: auto; }}
+    </style>
+</head>
+<body>
+    {content_html}
+    {unsubscribe_footer}
+</body>
+</html>
+                '''
             
             mail_options = {
                 'from': f"{from_email_name} <{primary_config['email_id']}>",
@@ -482,15 +575,13 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
                 'html': html_body
             }
             
-            # Add PDF attachment if provided
-            if pdf_url and pdf_filename:
-                try:
-                    pdf_response = requests.get(pdf_url, timeout=10)
-                    if pdf_response.status_code == 200:
-                        mail_options['pdf_data'] = pdf_response.content
-                        mail_options['pdf_filename'] = pdf_filename
-                except Exception as e:
-                    print(f'Error fetching PDF attachment: {e}')
+            # Add embedded images for CID references
+            if embedded_images and isinstance(embedded_images, list) and len(embedded_images) > 0:
+                mail_options['embedded_images'] = embedded_images
+            
+            # Add attachments (supports multiple file types)
+            if attachments and isinstance(attachments, list) and len(attachments) > 0:
+                mail_options['attachments'] = attachments
         
         else:
             # Contact form (default)

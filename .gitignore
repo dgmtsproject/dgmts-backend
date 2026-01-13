@@ -9,4 +9,5 @@ passenger_wsgi.py
 /ftp-server-files/
 CHANGELOG.md
 .env
+venv
 index.ts
