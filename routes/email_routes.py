@@ -70,6 +70,10 @@ def dgmts_static_send_mail():
         embedded_images = data.get('embeddedImages')  # New: CID embedded images
         token = data.get('token')
         include_header_footer = data.get('includeHeaderFooter', False)  # New: header/footer toggle
+        # Custom header/footer as structured objects with user-friendly fields
+        custom_header = data.get('customHeader')  # {backgroundColor, heading, tagline}
+        custom_footer = data.get('customFooter')  # {footerText, linkText, linkUrl}
+        is_test_mode = data.get('isTestMode', False)  # New: test mode to use secondary email
         payment_data = data.get('paymentData')
         
         print(f'Email request received: type={email_type}, email={email}')
@@ -122,6 +126,14 @@ def dgmts_static_send_mail():
         # Get primary SMTP settings
         primary_smtp = get_smtp_settings(primary_config['email_id'])
         from_email_name = primary_config.get('from_email_name', 'DGMTS').strip()
+        
+        # Determine which config to use based on test mode
+        # When test mode is enabled, use secondary email if available
+        active_config = primary_config
+        if is_test_mode and secondary_config:
+            active_config = secondary_config
+            from_email_name = secondary_config.get('from_email_name', 'DGMTS Test').strip()
+            print(f"Test mode enabled - using secondary config ({secondary_config['email_id']})")
         
         # BCC and admin emails
         bcc_emails = ["iaziz@dullesgeotechnical.com", "info@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com"]
@@ -513,6 +525,53 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
                     html_body = html_content + unsubscribe_footer
             elif use_template:
                 # Use DGMTS template wrapper with header and footer
+                # Extract custom header fields (if provided)
+                header_bg_color = '#4a90e2'  # Default blue
+                header_heading = '📰 DGMTS Newsletter'
+                header_tagline = ''
+                
+                if custom_header and isinstance(custom_header, dict):
+                    if custom_header.get('backgroundColor'):
+                        header_bg_color = custom_header['backgroundColor']
+                    if custom_header.get('heading'):
+                        header_heading = custom_header['heading']
+                    if custom_header.get('tagline'):
+                        header_tagline = custom_header['tagline']
+                
+                # Build header HTML
+                tagline_html = f'<p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">{header_tagline}</p>' if header_tagline else ''
+                header_html = f'''
+    <div style="background: {header_bg_color}; color: white; padding: 40px 30px; text-align: center;">
+        <h1 style="margin: 0; font-size: 24px;">{header_heading}</h1>
+        {tagline_html}
+    </div>'''
+                
+                # Extract custom footer fields (if provided)
+                footer_text = ''
+                footer_link_text = ''
+                footer_link_url = ''
+                
+                if custom_footer and isinstance(custom_footer, dict):
+                    footer_text = custom_footer.get('footerText', '')
+                    footer_link_text = custom_footer.get('linkText', '')
+                    footer_link_url = custom_footer.get('linkUrl', '')
+                
+                # Build footer HTML
+                footer_text_html = f'<p style="margin: 0 0 10px 0;">{footer_text}</p>' if footer_text else ''
+                footer_link_html = f'<p style="margin: 0 0 10px 0;"><a href="{footer_link_url}" style="color: #4a90e2;">{footer_link_text}</a></p>' if footer_link_text and footer_link_url else ''
+                
+                # If no custom footer content, use default message
+                if not footer_text and not footer_link_text:
+                    footer_content_html = f'<p style="margin: 0 0 10px 0;">This email was sent to {email} because you are subscribed to our newsletter.</p>'
+                else:
+                    footer_content_html = footer_text_html + footer_link_html
+                
+                footer_html = f'''
+    <div style="background: #2c3e50; color: white; padding: 25px; text-align: center; font-size: 12px;">
+        {footer_content_html}
+        <p style="margin: 10px 0 0 0;"><a href="{unsubscribe_url}" style="color: #4a90e2;">Unsubscribe</a></p>
+    </div>'''
+                
                 html_body = f'''
 <!DOCTYPE html>
 <html>
@@ -520,24 +579,17 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
     <meta charset="utf-8">
     <style>
         body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }}
-        .header {{ background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%); color: white; padding: 40px 30px; text-align: center; }}
-        .content {{ padding: 40px 30px; background: #ffffff; }}
-        .footer {{ background: #2c3e50; color: white; padding: 25px; text-align: center; font-size: 12px; }}
+        img {{ max-width: 100%; height: auto; }}
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>📰 DGMTS Newsletter</h1>
-    </div>
-    <div class="content">
+{header_html}
+    <div style="padding: 40px 30px; background: #ffffff;">
         <p>Dear <strong>{subscriber_name}</strong>,</p>
         <div>{html_content or message.replace(chr(10), '<br>')}</div>
         <p>Best regards,<br><strong>The DGMTS Team</strong></p>
     </div>
-    <div class="footer">
-        <p>This email was sent to {email} because you are subscribed to our newsletter.</p>
-        <p><a href="{unsubscribe_url}" style="color: #4a90e2;">Unsubscribe</a></p>
-    </div>
+{footer_html}
 </body>
 </html>
                 '''
@@ -568,7 +620,7 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
                 '''
             
             mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': email,
                 'subject': email_subject,
                 'text': f'{email_subject}\n\n{message}\n\nBest regards,\nThe DGMTS Team',
@@ -647,7 +699,11 @@ Reply directly to this email to respond to {name}.
             }
         
         # Send email with fallback
-        result = send_email_with_fallback(mail_options)
+        # For subscriber_notification in test mode, use active_config (which may be secondary)
+        if email_type == 'subscriber_notification' and is_test_mode and secondary_config:
+            result = send_email_with_fallback(mail_options, active_config)
+        else:
+            result = send_email_with_fallback(mail_options)
         
         return jsonify({
             'message': 'Email sent successfully',
