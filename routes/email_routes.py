@@ -635,6 +635,312 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
             if attachments and isinstance(attachments, list) and len(attachments) > 0:
                 mail_options['attachments'] = attachments
         
+        elif email_type == 'payment_portal_approval':
+            # Payment Portal Approval Email - send login credentials to approved user
+            applicant_email = data.get('applicantEmail')
+            applicant_name = data.get('applicantName')
+            user_id = data.get('userId')
+            password = data.get('password')
+            
+            if not all([applicant_email, applicant_name, user_id, password]):
+                return jsonify({'error': 'Missing required fields for payment_portal_approval: applicantEmail, applicantName, userId, password'}), 400
+            
+            mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': applicant_email,
+                'subject': 'Payment Registration Approval',
+                'text': f'''
+Hello,
+
+Thank you for registering with us.
+
+Your registration has been completed successfully. Please find your login details below:
+
+User ID: {user_id}
+Password: {password}
+
+You can now login at: https://dgmts-static.vercel.app/payment-login
+
+If you have any questions or need assistance, please feel free to contact us.
+
+Thank you,
+Best Regards
+DGMTS Team
+                ''',
+                'html': f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{ 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background-color: #f4f4f4;
+        }}
+        .email-container {{
+            background-color: #ffffff;
+            margin: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+        .header {{ 
+            background: linear-gradient(135deg, #28a745 0%, #218838 100%);
+            color: white; 
+            padding: 30px 20px; 
+            text-align: center; 
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }}
+        .content {{ 
+            padding: 30px 20px; 
+        }}
+        .credentials-box {{ 
+            background: #e7f9ef; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin: 20px 0; 
+            border-left: 4px solid #28a745; 
+        }}
+        .credentials-box h2 {{
+            color: #28a745;
+            font-size: 18px;
+            margin: 0 0 15px 0;
+        }}
+        .credential-row {{
+            display: flex;
+            padding: 8px 0;
+            border-bottom: 1px solid #c3e6cb;
+        }}
+        .credential-row:last-child {{
+            border-bottom: none;
+        }}
+        .label {{ 
+            font-weight: 600; 
+            color: #155724; 
+            min-width: 100px;
+        }}
+        .value {{
+            color: #155724;
+            font-family: 'Courier New', monospace;
+            background: #d4edda;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }}
+        .login-button {{
+            display: inline-block;
+            padding: 14px 30px;
+            background: #28a745;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            margin: 20px 0;
+        }}
+        .footer {{ 
+            background: #f8f9fa; 
+            color: #6c757d; 
+            padding: 20px; 
+            text-align: center; 
+            font-size: 12px;
+            border-top: 1px solid #e0e0e0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h1>✓ Registration Approved!</h1>
+        </div>
+        
+        <div class="content">
+            <p>Hello <strong>{applicant_name}</strong>,</p>
+            
+            <p>Thank you for registering with us.</p>
+            
+            <p>Your registration has been completed successfully. Please find your login details below:</p>
+            
+            <div class="credentials-box">
+                <h2>🔐 Your Login Credentials</h2>
+                <div class="credential-row">
+                    <span class="label">User ID:</span>
+                    <span class="value">{user_id}</span>
+                </div>
+                <div class="credential-row">
+                    <span class="label">Password:</span>
+                    <span class="value">{password}</span>
+                </div>
+            </div>
+            
+            <div style="text-align: center;">
+                <a href="https://dgmts-static.vercel.app/payment-login" class="login-button">
+                    Login Now
+                </a>
+            </div>
+            
+            <p style="margin-top: 20px;">If you have any questions or need assistance, please feel free to contact us.</p>
+            
+            <p>Thank you,<br>
+            <strong>Best Regards</strong><br>
+            DGMTS Team</p>
+        </div>
+        
+        <div class="footer">
+            <p><strong>DGMTS Payment Portal System</strong></p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>
+                '''
+            }
+        
+        elif email_type == 'payment_portal_denial':
+            # Payment Portal Denial Email - notify user of denial with reason
+            applicant_email = data.get('applicantEmail')
+            applicant_name = data.get('applicantName')
+            reason = data.get('reason')
+            
+            if not all([applicant_email, applicant_name, reason]):
+                return jsonify({'error': 'Missing required fields for payment_portal_denial: applicantEmail, applicantName, reason'}), 400
+            
+            mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': applicant_email,
+                'subject': 'Payment Registration Request – Denied',
+                'text': f'''
+Hello,
+
+Thank you for submitting your request to register for payment access.
+
+After careful review, we regret to inform you that your registration request has been denied at this time.
+
+Reason: {reason}
+
+You may reapply once the above requirements are fulfilled. If you have any questions or need clarification, please feel free to contact us.
+
+We appreciate your understanding and look forward to assisting you in the future.
+
+Thanks & Regards
+DGMTS Team
+                ''',
+                'html': f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{ 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background-color: #f4f4f4;
+        }}
+        .email-container {{
+            background-color: #ffffff;
+            margin: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+        .header {{ 
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            color: white; 
+            padding: 30px 20px; 
+            text-align: center; 
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }}
+        .content {{ 
+            padding: 30px 20px; 
+        }}
+        .reason-box {{ 
+            background: #fff3cd; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin: 20px 0; 
+            border-left: 4px solid #ffc107; 
+        }}
+        .reason-box h2 {{
+            color: #856404;
+            font-size: 18px;
+            margin: 0 0 10px 0;
+        }}
+        .reason-box p {{
+            color: #856404;
+            margin: 0;
+            font-size: 14px;
+        }}
+        .info-box {{
+            background: #e7f3ff;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }}
+        .footer {{ 
+            background: #f8f9fa; 
+            color: #6c757d; 
+            padding: 20px; 
+            text-align: center; 
+            font-size: 12px;
+            border-top: 1px solid #e0e0e0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h1>Registration Request Update</h1>
+        </div>
+        
+        <div class="content">
+            <p>Hello <strong>{applicant_name}</strong>,</p>
+            
+            <p>Thank you for submitting your request to register for payment access.</p>
+            
+            <p>After careful review, we regret to inform you that your registration request has been denied at this time.</p>
+            
+            <div class="reason-box">
+                <h2>📋 Reason for Denial</h2>
+                <p>{reason}</p>
+            </div>
+            
+            <div class="info-box">
+                <p><strong>What's Next?</strong></p>
+                <p>You may reapply once the above requirements are fulfilled. If you have any questions or need clarification, please feel free to contact us.</p>
+            </div>
+            
+            <p>We appreciate your understanding and look forward to assisting you in the future.</p>
+            
+            <p>Thanks & Regards,<br>
+            <strong>DGMTS Team</strong></p>
+        </div>
+        
+        <div class="footer">
+            <p><strong>DGMTS Payment Portal System</strong></p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>
+                '''
+            }
+        
         elif email_type == 'payment_portal_registration':
             # Payment Portal Registration Email - sent to DGMTS contact person for approval
             applicant_name = data.get('applicantName')
