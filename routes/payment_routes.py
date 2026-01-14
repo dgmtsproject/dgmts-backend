@@ -255,4 +255,3 @@ def process_payment():
             "error": f"Payment processing failed: {str(e)}",
             "status": "error"
         }), 500
-

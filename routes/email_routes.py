@@ -635,6 +635,277 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
             if attachments and isinstance(attachments, list) and len(attachments) > 0:
                 mail_options['attachments'] = attachments
         
+        elif email_type == 'payment_portal_registration':
+            # Payment Portal Registration Email - sent to DGMTS contact person for approval
+            applicant_name = data.get('applicantName')
+            applicant_email = data.get('applicantEmail')
+            applicant_phone = data.get('applicantPhone')
+            contact_person_email = data.get('contactPersonEmail')
+            contact_person_name = data.get('contactPersonName')
+            user_id = data.get('userId')
+            site_url = data.get('siteUrl')
+            
+            if not all([applicant_name, applicant_email, applicant_phone, contact_person_email, contact_person_name, user_id, site_url]):
+                return jsonify({'error': 'Missing required fields for payment_portal_registration: applicantName, applicantEmail, applicantPhone, contactPersonEmail, contactPersonName, userId, siteUrl'}), 400
+            
+            # Build approval/denial URLs
+            approve_url = f"{site_url}/payment-portal-approval?action=approve&userId={user_id}"
+            deny_url = f"{site_url}/payment-portal-approval?action=deny&userId={user_id}"
+            
+            mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': contact_person_email,
+                'subject': 'New User Payment Portal Registration Request',
+                'text': f'''
+NEW USER PAYMENT PORTAL REGISTRATION REQUEST
+============================================
+
+Hello {contact_person_name},
+
+A new user has submitted a request to register for the payment portal.
+
+APPLICANT DETAILS:
+------------------
+Name: {applicant_name}
+Email: {applicant_email}
+Phone: {applicant_phone}
+
+Please review this request and take action:
+
+APPROVE: {approve_url}
+DENY: {deny_url}
+
+If you need any additional information, you may contact the applicant directly at {applicant_email}.
+
+---
+This is an automated message from the DGMTS Payment Portal System.
+                ''',
+                'html': f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{ 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background-color: #f4f4f4;
+        }}
+        .email-container {{
+            background-color: #ffffff;
+            margin: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
+        .header {{ 
+            background: linear-gradient(135deg, #4a90e2 0%, #1e7bb5 100%);
+            color: white; 
+            padding: 30px 20px; 
+            text-align: center; 
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }}
+        .header p {{
+            margin: 5px 0 0 0;
+            opacity: 0.9;
+            font-size: 14px;
+        }}
+        .content {{ 
+            padding: 30px 20px; 
+        }}
+        .greeting {{
+            font-size: 16px;
+            margin-bottom: 20px;
+            color: #333;
+        }}
+        .applicant-details {{ 
+            background: #f8f9fa; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin: 20px 0; 
+            border-left: 4px solid #4a90e2; 
+        }}
+        .applicant-details h2 {{
+            color: #4a90e2;
+            font-size: 18px;
+            margin: 0 0 15px 0;
+            font-weight: 600;
+        }}
+        .detail-row {{
+            display: flex;
+            padding: 8px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }}
+        .detail-row:last-child {{
+            border-bottom: none;
+        }}
+        .label {{ 
+            font-weight: 600; 
+            color: #555; 
+            min-width: 100px;
+            font-size: 14px;
+        }}
+        .value {{
+            color: #333;
+            font-size: 14px;
+            word-break: break-word;
+        }}
+        .action-section {{
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+            text-align: center;
+        }}
+        .action-section p {{
+            margin: 0 0 20px 0;
+            font-size: 15px;
+            font-weight: 600;
+            color: #856404;
+        }}
+        .button-container {{
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }}
+        .btn {{
+            display: inline-block;
+            padding: 14px 30px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 15px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }}
+        .btn-approve {{
+            background-color: #28a745;
+            color: white;
+        }}
+        .btn-approve:hover {{
+            background-color: #218838;
+        }}
+        .btn-deny {{
+            background-color: #dc3545;
+            color: white;
+        }}
+        .btn-deny:hover {{
+            background-color: #c82333;
+        }}
+        .note {{
+            background: #e7f3ff;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+            font-size: 14px;
+            color: #0d47a1;
+        }}
+        .footer {{ 
+            background: #f8f9fa; 
+            color: #6c757d; 
+            padding: 20px; 
+            text-align: center; 
+            font-size: 12px;
+            border-top: 1px solid #e0e0e0;
+        }}
+        .footer p {{
+            margin: 5px 0;
+        }}
+        
+        /* Responsive */
+        @media only screen and (max-width: 600px) {{
+            .email-container {{
+                margin: 0;
+                border-radius: 0;
+            }}
+            .content {{
+                padding: 20px 15px;
+            }}
+            .button-container {{
+                flex-direction: column;
+            }}
+            .btn {{
+                width: 100%;
+            }}
+            .detail-row {{
+                flex-direction: column;
+            }}
+            .label {{
+                margin-bottom: 4px;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h1>🔔 New Payment Portal Registration</h1>
+            <p>Action Required</p>
+        </div>
+        
+        <div class="content">
+            <div class="greeting">
+                Hello <strong>{contact_person_name}</strong>,
+            </div>
+            
+            <p>A new user has submitted a request to register for the payment portal.</p>
+            
+            <div class="applicant-details">
+                <h2>👤 Applicant Details</h2>
+                <div class="detail-row">
+                    <span class="label">Name:</span>
+                    <span class="value">{applicant_name}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Email:</span>
+                    <span class="value"><a href="mailto:{applicant_email}" style="color: #4a90e2; text-decoration: none;">{applicant_email}</a></span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Phone:</span>
+                    <span class="value"><a href="tel:{applicant_phone}" style="color: #4a90e2; text-decoration: none;">{applicant_phone}</a></span>
+                </div>
+            </div>
+            
+            <div class="action-section">
+                <p>⚡ Please review the request and take action:</p>
+                <div class="button-container">
+                    <a href="{approve_url}" class="btn btn-approve">
+                        ✓ Approve Access
+                    </a>
+                    <a href="{deny_url}" class="btn btn-deny">
+                        ✗ Deny Access
+                    </a>
+                </div>
+            </div>
+            
+            <div class="note">
+                <strong>📞 Need More Information?</strong><br>
+                You may contact the applicant directly at <a href="mailto:{applicant_email}" style="color: #0d47a1;">{applicant_email}</a> or <a href="tel:{applicant_phone}" style="color: #0d47a1;">{applicant_phone}</a>.
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p><strong>DGMTS Payment Portal System</strong></p>
+            <p>This is an automated message. Please do not reply to this email.</p>
+            <p>If you have questions, contact your system administrator.</p>
+        </div>
+    </div>
+</body>
+</html>
+                '''
+            }
+        
         else:
             # Contact form (default)
             if not name or not email or not message:
