@@ -1212,6 +1212,55 @@ This is an automated message from the DGMTS Payment Portal System.
                 '''
             }
         
+        elif email_type == 'payment_portal_password_reset_request':
+            # Password Reset Request Email - notify contact person
+            applicant_name = data.get('applicantName')
+            applicant_email = data.get('applicantEmail')
+            contact_person_email = data.get('contactPersonEmail')
+            contact_person_name = data.get('contactPersonName')
+            
+            if not all([applicant_name, applicant_email, contact_person_email, contact_person_name]):
+                return jsonify({'error': 'Missing required fields for payment_portal_password_reset_request: applicantName, applicantEmail, contactPersonEmail, contactPersonName'}), 400
+            
+            mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': contact_person_email,
+                'subject': 'Password Reset Request - Payment Portal',
+                'text': f'''
+Hello {contact_person_name},
+
+{applicant_name} ({applicant_email}) has requested a password reset for their Payment Portal account.
+
+Thank you,
+DGMTS Team
+                ''',
+                'html': f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; }}
+        .container {{ padding: 20px; }}
+        h2 {{ color: #333; }}
+        p {{ line-height: 1.6; color: #555; }}
+        .footer {{ margin-top: 30px; color: #666; font-size: 14px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Password Reset Request</h2>
+        <p>Hello {contact_person_name},</p>
+        <p><strong>{applicant_name}</strong> ({applicant_email}) has requested a password reset for their Payment Portal account.</p>
+        <div class="footer">
+            <p>Thank you,<br>DGMTS Team</p>
+        </div>
+    </div>
+</body>
+</html>
+                '''
+            }
+        
         else:
             # Contact form (default)
             if not name or not email or not message:
