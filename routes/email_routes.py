@@ -1218,42 +1218,393 @@ This is an automated message from the DGMTS Payment Portal System.
             applicant_email = data.get('applicantEmail')
             contact_person_email = data.get('contactPersonEmail')
             contact_person_name = data.get('contactPersonName')
+            site_url = data.get('siteUrl', 'https://dullesgeotechnical.com')
+            user_id = data.get('userId')
             
-            if not all([applicant_name, applicant_email, contact_person_email, contact_person_name]):
-                return jsonify({'error': 'Missing required fields for payment_portal_password_reset_request: applicantName, applicantEmail, contactPersonEmail, contactPersonName'}), 400
+            if not all([applicant_name, applicant_email, contact_person_email, contact_person_name, user_id]):
+                return jsonify({'error': 'Missing required fields for payment_portal_password_reset_request: applicantName, applicantEmail, contactPersonEmail, contactPersonName, userId'}), 400
+            
+            reset_url = f"{site_url}/password-reset-by-contact?userId={user_id}"
+            current_year = datetime.now().year
             
             mail_options = {
                 'from': f"{from_email_name} <{primary_config['email_id']}>",
                 'to': contact_person_email,
-                'subject': 'Password Reset Request - Payment Portal',
-                'text': f'''
+                'subject': '🔑 Password Reset Request - Payment Portal',
+                'text': f'''PASSWORD RESET REQUEST - PAYMENT PORTAL
+========================================
+
 Hello {contact_person_name},
 
-{applicant_name} ({applicant_email}) has requested a password reset for their Payment Portal account.
+A user has requested a password reset for their payment portal account.
 
-Thank you,
-DGMTS Team
+USER INFORMATION:
+Name: {applicant_name}
+Email: {applicant_email}
+
+ACTION REQUIRED:
+Click the link below to reset this user's password:
+
+{reset_url}
+
+You will be able to:
+- View the current password
+- Generate a new secure password
+- The new password will be automatically emailed to the user
+
+If you did not expect this request or have questions, please contact your administrator.
+
+Best regards,
+DGMTS Payment Portal System
+
+---
+This is an automated notification from the DGMTS Payment Portal system.
+© {current_year} DGMTS. All rights reserved.
                 ''',
-                'html': f'''
-<!DOCTYPE html>
+                'html': f'''<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <style>
-        body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; }}
-        .container {{ padding: 20px; }}
-        h2 {{ color: #333; }}
-        p {{ line-height: 1.6; color: #555; }}
-        .footer {{ margin-top: 30px; color: #666; font-size: 14px; }}
+        body {{ 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background-color: #f4f4f4; 
+        }}
+        .email-container {{ 
+            background: white; 
+            margin: 20px auto; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
+        }}
+        .header {{ 
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); 
+            color: white; 
+            padding: 40px 30px; 
+            text-align: center; 
+        }}
+        .header h1 {{ 
+            margin: 0; 
+            font-size: 28px; 
+            font-weight: 600; 
+        }}
+        .header p {{ 
+            margin: 10px 0 0 0; 
+            font-size: 16px; 
+            opacity: 0.9; 
+        }}
+        .content {{ 
+            padding: 40px 30px; 
+            background: #ffffff; 
+        }}
+        .info-box {{
+            background: #f8f9fa;
+            border-left: 4px solid #dc3545;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }}
+        .info-box h3 {{
+            margin-top: 0;
+            color: #dc3545;
+        }}
+        .info-item {{
+            margin: 10px 0;
+        }}
+        .label {{
+            font-weight: 600;
+            color: #666;
+        }}
+        .value {{
+            color: #333;
+        }}
+        .action-button {{
+            display: inline-block;
+            padding: 16px 32px;
+            background: #4a90e2;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 16px;
+            margin: 20px 0;
+        }}
+        .action-button:hover {{
+            background: #357abd;
+        }}
+        .instructions {{
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }}
+        .footer {{ 
+            background: #2c3e50; 
+            color: white; 
+            padding: 25px; 
+            text-align: center; 
+            font-size: 12px; 
+            line-height: 1.8; 
+        }}
+        @media only screen and (max-width: 600px) {{
+            .content {{ padding: 20px; }}
+            .header {{ padding: 30px 20px; }}
+            .header h1 {{ font-size: 24px; }}
+        }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2>Password Reset Request</h2>
-        <p>Hello {contact_person_name},</p>
-        <p><strong>{applicant_name}</strong> ({applicant_email}) has requested a password reset for their Payment Portal account.</p>
+    <div class="email-container">
+        <div class="header">
+            <h1>🔑 Password Reset Request</h1>
+            <p>Payment Portal Access</p>
+        </div>
+        
+        <div class="content">
+            <p>Hello <strong>{contact_person_name}</strong>,</p>
+            
+            <p>A user has requested a password reset for their payment portal account.</p>
+            
+            <div class="info-box">
+                <h3>👤 User Information</h3>
+                <div class="info-item">
+                    <span class="label">Name:</span> 
+                    <span class="value">{applicant_name}</span>
+                </div>
+                <div class="info-item">
+                    <span class="label">Email:</span> 
+                    <span class="value">{applicant_email}</span>
+                </div>
+            </div>
+            
+            <div class="instructions">
+                <strong>⚠️ Action Required:</strong>
+                <p style="margin: 10px 0 0 0;">
+                    Click the button below to reset this user's password. You will be able to:
+                </p>
+                <ul style="margin: 10px 0 0 20px;">
+                    <li>View the current password</li>
+                    <li>Generate a new secure password</li>
+                    <li>The new password will be automatically emailed to the user</li>
+                </ul>
+            </div>
+            
+            <div style="text-align: center;">
+                <a href="{reset_url}" class="action-button">
+                    🔐 Reset User Password
+                </a>
+            </div>
+            
+            <p style="margin-top: 30px; font-size: 14px; color: #666;">
+                If you did not expect this request or have questions, please contact your administrator.
+            </p>
+            
+            <p style="margin-top: 30px;">Best regards,<br><strong>DGMTS Payment Portal System</strong></p>
+        </div>
+        
         <div class="footer">
-            <p>Thank you,<br>DGMTS Team</p>
+            <p>This is an automated notification from the DGMTS Payment Portal system.</p>
+            <p style="margin-top: 10px; opacity: 0.8;">© {current_year} DGMTS. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+                '''
+            }
+        
+        elif email_type == 'payment_portal_password_updated':
+            # Password Updated Email - notify user that password has been reset
+            applicant_email = data.get('applicantEmail')
+            applicant_name = data.get('applicantName')
+            new_password = data.get('newPassword')
+            login_url = data.get('loginUrl', 'https://dullesgeotechnical.com/payment-portal-login')
+            
+            if not all([applicant_email, applicant_name, new_password]):
+                return jsonify({'error': 'Missing required fields for payment_portal_password_updated: applicantEmail, applicantName, newPassword'}), 400
+            
+            current_year = datetime.now().year
+            
+            mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': applicant_email,
+                'subject': '✅ Your Payment Portal Password Has Been Reset',
+                'text': f'''PASSWORD RESET SUCCESSFUL - PAYMENT PORTAL
+===========================================
+
+Hello {applicant_name},
+
+Your payment portal password has been successfully reset as per your request.
+
+YOUR NEW PASSWORD:
+{new_password}
+
+Please copy this password and keep it in a safe place.
+
+Login to Payment Portal:
+{login_url}
+
+SECURITY RECOMMENDATIONS:
+- Change this password after your first login
+- Use a strong, unique password
+- Never share your password with anyone
+- Contact us immediately if you notice any suspicious activity
+
+If you did not request this password reset, please contact your DGMTS contact person immediately.
+
+Best regards,
+The DGMTS Team
+
+---
+This is an automated notification from the DGMTS Payment Portal system.
+© {current_year} DGMTS. All rights reserved.
+                ''',
+                'html': f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background-color: #f4f4f4; 
+        }}
+        .email-container {{ 
+            background: white; 
+            margin: 20px auto; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
+        }}
+        .header {{ 
+            background: linear-gradient(135deg, #28a745 0%, #218838 100%); 
+            color: white; 
+            padding: 40px 30px; 
+            text-align: center; 
+        }}
+        .header h1 {{ 
+            margin: 0; 
+            font-size: 28px; 
+            font-weight: 600; 
+        }}
+        .header p {{ 
+            margin: 10px 0 0 0; 
+            font-size: 16px; 
+            opacity: 0.9; 
+        }}
+        .content {{ 
+            padding: 40px 30px; 
+            background: #ffffff; 
+        }}
+        .password-box {{
+            background: #d4edda;
+            border: 2px solid #28a745;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            text-align: center;
+        }}
+        .password-box h3 {{
+            margin-top: 0;
+            color: #155724;
+        }}
+        .password-value {{
+            font-family: 'Courier New', monospace;
+            font-size: 24px;
+            font-weight: 700;
+            color: #155724;
+            letter-spacing: 2px;
+            padding: 15px;
+            background: white;
+            border-radius: 6px;
+            margin: 10px 0;
+        }}
+        .action-button {{
+            display: inline-block;
+            padding: 16px 32px;
+            background: #4a90e2;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 16px;
+            margin: 20px 0;
+        }}
+        .action-button:hover {{
+            background: #357abd;
+        }}
+        .security-note {{
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }}
+        .footer {{ 
+            background: #2c3e50; 
+            color: white; 
+            padding: 25px; 
+            text-align: center; 
+            font-size: 12px; 
+            line-height: 1.8; 
+        }}
+        @media only screen and (max-width: 600px) {{
+            .content {{ padding: 20px; }}
+            .header {{ padding: 30px 20px; }}
+            .header h1 {{ font-size: 24px; }}
+            .password-value {{ font-size: 18px; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h1>✅ Password Reset Successful</h1>
+            <p>Payment Portal Access</p>
+        </div>
+        
+        <div class="content">
+            <p>Hello <strong>{applicant_name}</strong>,</p>
+            
+            <p>Your payment portal password has been successfully reset as per your request.</p>
+            
+            <div class="password-box">
+                <h3>🔑 Your New Password</h3>
+                <div class="password-value">{new_password}</div>
+                <p style="margin: 0; font-size: 13px; color: #155724;">
+                    Please copy this password and keep it in a safe place.
+                </p>
+            </div>
+            
+            <div style="text-align: center;">
+                <a href="{login_url}" class="action-button">
+                    🔐 Login to Payment Portal
+                </a>
+            </div>
+            
+            <div class="security-note">
+                <strong>🔒 Security Recommendations:</strong>
+                <ul style="margin: 10px 0 0 20px;">
+                    <li>Change this password after your first login</li>
+                    <li>Use a strong, unique password</li>
+                    <li>Never share your password with anyone</li>
+                    <li>Contact us immediately if you notice any suspicious activity</li>
+                </ul>
+            </div>
+            
+            <p style="margin-top: 30px; font-size: 14px; color: #666;">
+                If you did not request this password reset, please contact your DGMTS contact person immediately.
+            </p>
+            
+            <p style="margin-top: 30px;">Best regards,<br><strong>The DGMTS Team</strong></p>
+        </div>
+        
+        <div class="footer">
+            <p>This is an automated notification from the DGMTS Payment Portal system.</p>
+            <p style="margin-top: 10px; opacity: 0.8;">© {current_year} DGMTS. All rights reserved.</p>
         </div>
     </div>
 </body>
