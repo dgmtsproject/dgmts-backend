@@ -136,8 +136,8 @@ def dgmts_static_send_mail():
             print(f"Test mode enabled - using secondary config ({secondary_config['email_id']})")
         
         # BCC and admin emails
-        bcc_emails = ["iaziz@dullesgeotechnical.com", "info@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com"]
-        payment_cc_emails = ["dgmts.project@gmail.com"]
+        bcc_emails = ["iaziz@dullesgeotechnical.com", "info@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com","danesh@dullesgeotechnical.com","thamid@dullesgeotechnical.com"]
+        payment_cc_emails = ["accounting@dullesgeotechnical.com", "info@dullesgeotechnical.com"]
         
         # Function to send email with fallback
         def send_email_with_fallback(mail_options, config_to_use=None):
