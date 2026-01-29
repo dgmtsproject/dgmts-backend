@@ -946,6 +946,7 @@ DGMTS Team
             applicant_name = data.get('applicantName')
             applicant_email = data.get('applicantEmail')
             applicant_phone = data.get('applicantPhone')
+            applicant_company_name = data.get('applicantCompanyName')  # optional, can be null
             contact_person_email = data.get('contactPersonEmail')
             contact_person_name = data.get('contactPersonName')
             user_id = data.get('userId')
@@ -973,7 +974,7 @@ A new user has submitted a request to register for the payment portal.
 APPLICANT DETAILS:
 ------------------
 Name: {applicant_name}
-Email: {applicant_email}
+{f"Company: {applicant_company_name}" + chr(10) if applicant_company_name else ""}Email: {applicant_email}
 Phone: {applicant_phone}
 
 Please review this request and take action:
@@ -1173,6 +1174,7 @@ This is an automated message from the DGMTS Payment Portal System.
                     <span class="label">Name:</span>
                     <span class="value">{applicant_name}</span>
                 </div>
+                {f'<div class="detail-row"><span class="label">Company:</span><span class="value">{applicant_company_name}</span></div>' if applicant_company_name else ''}
                 <div class="detail-row">
                     <span class="label">Email:</span>
                     <span class="value"><a href="mailto:{applicant_email}" style="color: #4a90e2; text-decoration: none;">{applicant_email}</a></span>
