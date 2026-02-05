@@ -136,8 +136,8 @@ def dgmts_static_send_mail():
             print(f"Test mode enabled - using secondary config ({secondary_config['email_id']})")
         
         # BCC and admin emails
-        bcc_emails = ["iaziz@dullesgeotechnical.com", "info@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com","danesh@dullesgeotechnical.com","thamid@dullesgeotechnical.com"]
-        payment_cc_emails = ["accounting@dullesgeotechnical.com", "info@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "danesh@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"]
+        bcc_emails = ["iaziz@dullesgeotechnical.com", "info@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"]
+        payment_cc_emails = ["accounting@dullesgeotechnical.com", "info@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"]
         
         # Function to send email with fallback
         def send_email_with_fallback(mail_options, config_to_use=None):
@@ -322,7 +322,9 @@ def dgmts_static_send_mail():
             }
             
         elif email_type == 'payment':
-            # Payment confirmation email
+            # Payment emails - sends TWO separate emails:
+            # 1. Payment Processed (to accounting team)
+            # 2. Payment Confirmation (to customer)
             if not payment_data or not email:
                 return jsonify({'error': 'Missing required fields for payment email: paymentData and email'}), 400
             
@@ -342,8 +344,98 @@ def dgmts_static_send_mail():
             formatted_service_charge = f"${service_charge:,.2f}"
             payment_date = datetime.now().strftime('%B %d, %Y')
             
-            # Customer email
-            mail_options = {
+            # EMAIL 1: Payment Processed - sent to accounting team
+            processed_mail_options = {
+                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'to': ['thamid@dullesgeotechnical.com', 'accounting@dullesgeotechnical.com'],
+                'bcc': ['info@dullesgeotechnical.com', 'iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com'],
+                'subject': f"💰 Payment Processed - Invoice #{invoice_no}",
+                'text': f'''
+PAYMENT PROCESSED
+
+A payment has been received and processed successfully.
+
+CUSTOMER INFORMATION:
+- Customer Name: {customer_name}
+- Customer Email: {customer_email}
+{f"- Customer Address: {customer_address}" if customer_address else ""}
+
+TRANSACTION DETAILS:
+- Transaction ID: {transaction_id}
+- Invoice Number: {invoice_no}
+- Payment Method: {payment_method}
+- Payment Date: {payment_date}
+
+PAYMENT SUMMARY:
+- Invoice Amount: {formatted_invoice_amount}
+- Service Charge: {formatted_service_charge}
+- Total Amount Paid: {formatted_amount}
+
+{f"PAYMENT NOTE:\\n{payment_note}\\n" if payment_note else ""}
+
+This is an internal notification. The customer has received a separate confirmation email.
+
+DGMTS Payment System
+                ''',
+                'html': f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }}
+        .header {{ background: linear-gradient(135deg, #0056d2 0%, #007bff 100%); color: white; padding: 30px; text-align: center; }}
+        .content {{ padding: 30px; background: #f9f9f9; }}
+        .info-box {{ background: white; padding: 25px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #0056d2; }}
+        .details-box {{ background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }}
+        .summary-box {{ background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; border: 2px solid #0056d2; }}
+        .footer {{ background: #333; color: white; padding: 15px; text-align: center; font-size: 12px; }}
+        .label {{ font-weight: bold; color: #0056d2; }}
+        .amount {{ font-size: 1.2em; font-weight: bold; color: #0056d2; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>💰 Payment Processed</h1>
+        <p>Internal Notification</p>
+    </div>
+    <div class="content">
+        <p><strong>A payment has been received and processed successfully.</strong></p>
+        <div class="info-box">
+            <h3>Customer Information</h3>
+            <p><span class="label">Customer Name:</span> {customer_name}</p>
+            <p><span class="label">Customer Email:</span> {customer_email}</p>
+            {f'<p><span class="label">Customer Address:</span> {customer_address}</p>' if customer_address else ''}
+        </div>
+        <div class="details-box">
+            <h3>Transaction Details</h3>
+            <p><span class="label">Transaction ID:</span> {transaction_id}</p>
+            <p><span class="label">Invoice Number:</span> {invoice_no}</p>
+            <p><span class="label">Payment Method:</span> {payment_method}</p>
+            <p><span class="label">Payment Date:</span> {payment_date}</p>
+        </div>
+        <div class="summary-box">
+            <h3 style="color: #0056d2; margin-top: 0;">Payment Summary</h3>
+            <p><span class="label">Invoice Amount:</span> {formatted_invoice_amount}</p>
+            <p><span class="label">Service Charge:</span> {formatted_service_charge}</p>
+            <hr>
+            <p><span class="label">Total Amount Paid:</span> <span class="amount">{formatted_amount}</span></p>
+        </div>
+        {f'<div class="info-box"><h3>Payment Note</h3><p>{payment_note}</p></div>' if payment_note else ''}
+        <p style="margin-top: 20px; padding: 15px; background: #e7f3ff; border-radius: 5px; font-size: 14px;">
+            <strong>Note:</strong> This is an internal notification. The customer has received a separate confirmation email.
+        </p>
+    </div>
+    <div class="footer">
+        <p>This is an automated internal notification from DGMTS Payment System.</p>
+    </div>
+</body>
+</html>
+                '''
+            }
+            
+            # EMAIL 2: Payment Confirmation - sent to customer
+            confirmation_mail_options = {
                 'from': f"{from_email_name} <{primary_config['email_id']}>",
                 'to': customer_email,
                 'bcc': payment_cc_emails,
@@ -397,7 +489,7 @@ DGMTS Team
         <p>Dear <strong>{customer_name}</strong>,</p>
         <p>Thank you for your Payment. Your transaction has been processed successfully.</p>
         <div class="success-box">
-            <h2 style="margin-top: 0; color: #28a745;">Payment Processed</h2>
+            <h2 style="margin-top: 0; color: #28a745;">Payment Received</h2>
             <p>Your payment has been processed. Please keep this email for your records.</p>
         </div>
         <div class="details-box">
@@ -414,6 +506,7 @@ DGMTS Team
             <hr>
             <p><span class="label">Total Amount Paid:</span> <span class="amount">{formatted_amount}</span></p>
         </div>
+        {f'<div class="success-box"><h3>Payment Note</h3><p>{payment_note}</p></div>' if payment_note else ''}
         <p>Best regards,<br><strong>DGMTS Team</strong></p>
     </div>
     <div class="footer">
@@ -423,6 +516,48 @@ DGMTS Team
 </html>
                 '''
             }
+            
+            # Send both emails
+            try:
+                # Send internal "Payment Processed" email first
+                result1 = send_email_with_fallback(processed_mail_options, active_config)
+                if not result1.get('success'):
+                    print(f"Warning: Failed to send internal payment processed email")
+                
+                # Send customer "Payment Confirmation" email
+                result2 = send_email_with_fallback(confirmation_mail_options, active_config)
+                if not result2.get('success'):
+                    return jsonify({
+                        'error': 'Failed to send customer payment confirmation email',
+                        'success': False
+                    }), 500
+                
+                # Both emails sent successfully
+                return jsonify({
+                    'message': 'Payment emails sent successfully',
+                    'success': True,
+                    'details': {
+                        'processedEmailSent': result1.get('success', False),
+                        'confirmationEmailSent': result2.get('success', False)
+                    }
+                }), 200, {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS'
+                }
+                
+            except Exception as email_error:
+                print(f"Error sending payment emails: {email_error}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({
+                    'error': f'Failed to send payment emails: {str(email_error)}',
+                    'success': False
+                }), 500, {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS'
+                }
             
         elif email_type == 'newsletter':
             # Newsletter subscription welcome email
@@ -2772,10 +2907,16 @@ def test_payment_email():
             if response.status_code == 200:
                 return jsonify({
                     'success': True,
-                    'message': 'Test payment email sent successfully!',
+                    'message': 'Test payment emails sent successfully! (2 emails sent)',
                     'details': {
-                        'customerEmail': test_payment_data['customerEmail'],
-                        'bccEmails': ["accounting@dullesgeotechnical.com", "info@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "danesh@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"],
+                        'email1_PaymentProcessed': {
+                            'to': ['thamid@dullesgeotechnical.com', 'accounting@dullesgeotechnical.com'],
+                            'bcc': ['info@dullesgeotechnical.com', 'iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com']
+                        },
+                        'email2_PaymentConfirmation': {
+                            'to': test_payment_data['customerEmail'],
+                            'bcc': ["accounting@dullesgeotechnical.com", "info@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"]
+                        },
                         'invoiceNo': test_payment_data['invoiceNo'],
                         'amount': f"${test_payment_data['amount']:.2f}",
                         'transactionId': test_payment_data['transactionId']
