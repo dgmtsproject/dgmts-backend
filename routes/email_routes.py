@@ -2731,6 +2731,8 @@ def test_payment_email():
     }
     """
     try:
+        from flask import current_app
+        
         # Get test data from request or use defaults
         data = request.get_json() or {}
         
@@ -2759,8 +2761,8 @@ def test_payment_email():
         print(f"Payment amount: ${test_payment_data['amount']:.2f}")
         print(f"Invoice number: {test_payment_data['invoiceNo']}")
         
-        # Make internal request to the send-mail endpoint
-        with email_bp.app.test_client() as client:
+        # Make internal request to the send-mail endpoint using current_app
+        with current_app.test_client() as client:
             response = client.post(
                 '/api/dgmts-static/send-mail',
                 json=mail_request,
