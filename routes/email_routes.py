@@ -2711,3 +2711,88 @@ def test_dullesgeotechnical_mail():
             'error': 'Failed to send test email',
             'message': str(e)
         }), 500
+
+@email_bp.route('/test-payment-email', methods=['POST'])
+def test_payment_email():
+    """
+    Test endpoint to send sample payment confirmation emails
+    
+    Request body (JSON):
+    {
+        "customerEmail": "test@example.com",
+        "customerName": "John Doe",
+        "invoiceNo": "INV-2024-001",
+        "amount": 1500.00,
+        "invoiceAmount": 1400.00,
+        "serviceCharge": 100.00,
+        "transactionId": "TXN-123456789",
+        "paymentMethod": "Credit Card",
+        "paymentNote": "Payment for geotechnical services"
+    }
+    """
+    try:
+        # Get test data from request or use defaults
+        data = request.get_json() or {}
+        
+        # Default test payment data
+        test_payment_data = {
+            'customerEmail': data.get('customerEmail', 'mahmerraza19@gmail.com'),
+            'customerName': data.get('customerName', 'Test Customer'),
+            'customerAddress': data.get('customerAddress', '123 Test Street, Test City, VA 20166'),
+            'invoiceNo': data.get('invoiceNo', 'INV-TEST-001'),
+            'amount': float(data.get('amount', 1500.00)),
+            'invoiceAmount': float(data.get('invoiceAmount', 1400.00)),
+            'serviceCharge': float(data.get('serviceCharge', 100.00)),
+            'transactionId': data.get('transactionId', f'TXN-TEST-{datetime.now().strftime("%Y%m%d%H%M%S")}'),
+            'paymentMethod': data.get('paymentMethod', 'Credit Card'),
+            'paymentNote': data.get('paymentNote', 'Test payment for geotechnical monitoring services')
+        }
+        
+        # Create the request payload for the send-mail endpoint
+        mail_request = {
+            'type': 'payment',
+            'email': test_payment_data['customerEmail'],
+            'paymentData': test_payment_data
+        }
+        
+        print(f"Sending test payment email to: {test_payment_data['customerEmail']}")
+        print(f"Payment amount: ${test_payment_data['amount']:.2f}")
+        print(f"Invoice number: {test_payment_data['invoiceNo']}")
+        
+        # Make internal request to the send-mail endpoint
+        with email_bp.app.test_client() as client:
+            response = client.post(
+                '/api/dgmts-static/send-mail',
+                json=mail_request,
+                content_type='application/json'
+            )
+            
+            if response.status_code == 200:
+                return jsonify({
+                    'success': True,
+                    'message': 'Test payment email sent successfully!',
+                    'details': {
+                        'customerEmail': test_payment_data['customerEmail'],
+                        'bccEmails': ["accounting@dullesgeotechnical.com", "info@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "danesh@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"],
+                        'invoiceNo': test_payment_data['invoiceNo'],
+                        'amount': f"${test_payment_data['amount']:.2f}",
+                        'transactionId': test_payment_data['transactionId']
+                    }
+                }), 200
+            else:
+                error_data = response.get_json() if response.get_json() else {'error': 'Unknown error'}
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to send test payment email',
+                    'details': error_data
+                }), response.status_code
+                
+    except Exception as e:
+        print(f"Failed to send test payment email: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': 'Failed to send test payment email',
+            'message': str(e)
+        }), 500
