@@ -137,7 +137,7 @@ def dgmts_static_send_mail():
         
         # BCC and admin emails
         bcc_emails = ["iaziz@dullesgeotechnical.com", "info@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"]
-        payment_cc_emails = ["accounting@dullesgeotechnical.com", "info@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"]
+        payment_cc_emails = ["accounting@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com", "mhussaini@dullesgeotechnical.com"]
         
         # Function to send email with fallback
         def send_email_with_fallback(mail_options, config_to_use=None):
@@ -348,7 +348,7 @@ def dgmts_static_send_mail():
             processed_mail_options = {
                 'from': f"{from_email_name} <{primary_config['email_id']}>",
                 'to': ['thamid@dullesgeotechnical.com', 'accounting@dullesgeotechnical.com'],
-                'bcc': ['info@dullesgeotechnical.com', 'iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com'],
+                'bcc': ['iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com', 'mhussaini@dullesgeotechnical.com'],
                 'subject': f"💰 Payment Processed - Invoice #{invoice_no}",
                 'text': f'''
 PAYMENT PROCESSED
@@ -2911,11 +2911,11 @@ def test_payment_email():
                     'details': {
                         'email1_PaymentProcessed': {
                             'to': ['thamid@dullesgeotechnical.com', 'accounting@dullesgeotechnical.com'],
-                            'bcc': ['info@dullesgeotechnical.com', 'iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com']
+                            'bcc': ['iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com', 'mhussaini@dullesgeotechnical.com']
                         },
                         'email2_PaymentConfirmation': {
                             'to': test_payment_data['customerEmail'],
-                            'bcc': ["accounting@dullesgeotechnical.com", "info@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"]
+                            'bcc': ["accounting@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com", "mhussaini@dullesgeotechnical.com"]
                         },
                         'invoiceNo': test_payment_data['invoiceNo'],
                         'amount': f"${test_payment_data['amount']:.2f}",
