@@ -36,6 +36,29 @@ def _ident(name: str) -> str:
     return name
 
 
+def _qident(name: str) -> str:
+    """Double-quote a PostgreSQL identifier (required for reserved words: user, order, group, …)."""
+    n = _ident(name)
+    return '"' + n.replace('"', '""') + '"'
+
+
+def _format_select_columns(cols) -> str:
+    if not cols or (isinstance(cols, str) and cols.strip() == '*'):
+        return '*'
+    if not isinstance(cols, str):
+        return '*'
+    out = []
+    for part in cols.split(','):
+        p = part.strip()
+        if not p or p == '*':
+            continue
+        if '(' in p:
+            out.append(p)
+        else:
+            out.append(_qident(p))
+    return ', '.join(out) if out else '*'
+
+
 def _where_clauses(filters, params):
     """Build SQL WHERE fragments; appends to params list in place."""
     parts = []
@@ -43,13 +66,13 @@ def _where_clauses(filters, params):
         return 'TRUE'
     for f in filters:
         op = f.get('op')
-        col = _ident(f['col'])
+        qcol = _qident(f['col'])
         if op == 'eq':
             val = f.get('val')
             if val is None:
-                parts.append(f'{col} IS NULL')
+                parts.append(f'{qcol} IS NULL')
             else:
-                parts.append(f'{col} = %s')
+                parts.append(f'{qcol} = %s')
                 params.append(val)
         elif op == 'in':
             vals = f.get('vals') or []
@@ -57,7 +80,7 @@ def _where_clauses(filters, params):
                 parts.append('FALSE')
             else:
                 ph = ','.join(['%s'] * len(vals))
-                parts.append(f'{col} IN ({ph})')
+                parts.append(f'{qcol} IN ({ph})')
                 params.extend(vals)
         else:
             raise ValueError(f'Unsupported filter op: {op}')
@@ -69,9 +92,9 @@ def _order_clause(order_list):
         return ''
     bits = []
     for o in order_list:
-        col = _ident(o['col'])
+        qcol = _qident(o['col'])
         direction = 'ASC' if o.get('asc', True) else 'DESC'
-        bits.append(f'{col} {direction}')
+        bits.append(f'{qcol} {direction}')
     return 'ORDER BY ' + ', '.join(bits)
 
 
@@ -105,6 +128,7 @@ def static_data():
                         continue
                     _ident(part)
 
+            select_sql = _format_select_columns(cols) if isinstance(cols, str) else '*'
             filters = body.get('filters') or []
             params = []
             where_sql = _where_clauses(filters, params)
@@ -112,7 +136,7 @@ def static_data():
             limit = body.get('limit')
             offset = body.get('offset') or 0
 
-            q = f'SELECT {cols} FROM {_ident(table)} WHERE {where_sql}'
+            q = f'SELECT {select_sql} FROM {_qident(table)} WHERE {where_sql}'
             if order_sql:
                 q += ' ' + order_sql
             if limit is not None:
@@ -153,11 +177,11 @@ def static_data():
                 if not isinstance(row, dict):
                     raise ValueError('Each row must be an object')
                 key_list = list(row.keys())
-                keys = [_ident(k) for k in key_list]
+                keys_quoted = [_qident(k) for k in key_list]
                 vals = [row[k] for k in key_list]
-                cols_sql = ', '.join(keys)
+                cols_sql = ', '.join(keys_quoted)
                 ph = ', '.join(['%s'] * len(vals))
-                q = f'INSERT INTO {_ident(table)} ({cols_sql}) VALUES ({ph})'
+                q = f'INSERT INTO {_qident(table)} ({cols_sql}) VALUES ({ph})'
                 if want_returning:
                     q += ' RETURNING *'
                     all_out.extend(static_db.execute(q, vals, returning=True))
@@ -182,10 +206,9 @@ def static_data():
             where_sql = _where_clauses(filters, params)
             sets = []
             for k, v in patch.items():
-                kk = _ident(k)
-                sets.append(f'{kk} = %s')
+                sets.append(f'{_qident(k)} = %s')
                 params.append(v)
-            q = f'UPDATE {_ident(table)} SET {", ".join(sets)} WHERE {where_sql}'
+            q = f'UPDATE {_qident(table)} SET {", ".join(sets)} WHERE {where_sql}'
             if want_returning:
                 q += ' RETURNING *'
                 out = static_db.execute(q, params, returning=True)
@@ -200,7 +223,7 @@ def static_data():
             want_returning = bool(body.get('returning', False))
             params = []
             where_sql = _where_clauses(filters, params)
-            q = f'DELETE FROM {_ident(table)} WHERE {where_sql}'
+            q = f'DELETE FROM {_qident(table)} WHERE {where_sql}'
             if want_returning:
                 q += ' RETURNING *'
                 out = static_db.execute(q, params, returning=True)
@@ -227,23 +250,23 @@ def static_data():
                     return jsonify({'data': None, 'error': {'message': 'All upsert rows must share columns'}}), 400
 
             key_ids = [_ident(k) for k in key_list]
-            cols_sql = ', '.join(key_ids)
+            cols_sql = ', '.join(_qident(k) for k in key_ids)
             flat = []
             ph_groups = []
             for row in rows_in:
                 ph_groups.append('(' + ','.join(['%s'] * len(key_list)) + ')')
                 flat.extend([row[k] for k in key_list])
 
-            q = f'INSERT INTO {_ident(table)} ({cols_sql}) VALUES {", ".join(ph_groups)}'
+            q = f'INSERT INTO {_qident(table)} ({cols_sql}) VALUES {", ".join(ph_groups)}'
 
             if cnames:
-                conflict_sql = ', '.join(cnames)
+                conflict_sql = ', '.join(_qident(c) for c in cnames)
                 cset = set(cnames)
                 non_conflict = [k for k in key_ids if k not in cset]
                 if not non_conflict:
                     q += f' ON CONFLICT ({conflict_sql}) DO NOTHING'
                 else:
-                    set_parts = [f'{k} = EXCLUDED.{k}' for k in non_conflict]
+                    set_parts = [f'{_qident(k)} = EXCLUDED.{_qident(k)}' for k in non_conflict]
                     q += f' ON CONFLICT ({conflict_sql}) DO UPDATE SET {", ".join(set_parts)}'
             q += ' RETURNING *'
 
