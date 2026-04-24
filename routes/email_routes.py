@@ -78,28 +78,28 @@ def dgmts_static_send_mail():
         
         print(f'Email request received: type={email_type}, email={email}')
         
-        # Get email configurations from DGMTS Static Supabase database
+        # Get email configurations from DGMTS Static Supabase (unchanged; not the Postgres migration)
         try:
-            # Debug: Print Supabase connection info
-            print(f'Connecting to DGMTS Static Supabase...')
+            print('Connecting to DGMTS Static Supabase (send-mail)...')
             print(f'DGMTS Static Supabase URL: {Config.DGMTS_STATIC_SUPABASE_URL}')
-            print(f'DGMTS Static Supabase Key exists: {bool(Config.DGMTS_STATIC_SUPABASE_KEY)}')
-            
-            # Create Supabase client for DGMTS Static database (where email_config table exists)
-            from supabase import create_client
-            dgmts_supabase = create_client(Config.DGMTS_STATIC_SUPABASE_URL, Config.DGMTS_STATIC_SUPABASE_KEY)
-            
-            print('Querying email_config table from DGMTS Static Supabase...')
+            print(f'DGMTS Static Supabase key set: {bool(Config.DGMTS_STATIC_SUPABASE_KEY)}')
+            dgmts_supabase = create_client(
+                Config.DGMTS_STATIC_SUPABASE_URL, Config.DGMTS_STATIC_SUPABASE_KEY
+            )
+            print('Querying email_config from DGMTS Static Supabase...')
             email_configs_resp = dgmts_supabase.table('email_config').select('*').order('type').execute()
-            
-            print(f'Query response data: {email_configs_resp.data}')
-            
             if not email_configs_resp.data:
                 return jsonify({'error': 'Email configuration not found. Please configure email settings in the admin panel.'}), 500
-            
+
             # Separate primary and secondary configs
-            primary_config = next((c for c in email_configs_resp.data if c.get('type') == 'primary'), email_configs_resp.data[0])
-            secondary_config = next((c for c in email_configs_resp.data if c.get('type') == 'secondary'), None)
+            primary_config = next(
+                (c for c in email_configs_resp.data if c.get('type') == 'primary'),
+                email_configs_resp.data[0]
+            )
+            secondary_config = next(
+                (c for c in email_configs_resp.data if c.get('type') == 'secondary'),
+                None
+            )
             
             print(f'Primary config found: {primary_config.get("email_id") if primary_config else "None"}')
             print(f'Secondary config found: {secondary_config.get("email_id") if secondary_config else "None"}')

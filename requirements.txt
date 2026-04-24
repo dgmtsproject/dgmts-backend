@@ -1,6 +1,7 @@
 flask
 flask_cors
 supabase
+psycopg2-binary
 python-dotenv
 werkzeug
 PyJWT

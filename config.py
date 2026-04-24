@@ -17,9 +17,27 @@ class Config:
     SUPABASE_URL = os.getenv('SUPABASE_URL')
     SUPABASE_KEY = os.getenv('SUPABASE_KEY')
     
-    # DGMTS Static Supabase Configuration (for email_config and send-mail endpoint)
+    # DGMTS Static Supabase — still used by /api/dgmts-static/send-mail (unchanged).
     DGMTS_STATIC_SUPABASE_URL = os.getenv('DGMTS_STATIC_SUPABASE_URL')
-    DGMTS_STATIC_SUPABASE_KEY = os.getenv('DGMTS_STATIC_SUPABASE_KEY')
+    DGMTS_STATIC_SUPABASE_KEY = os.getenv('DGMTS_STATIC_SUPABASE_KEY') or os.getenv(
+        'DGMTS_STATIC_SUPABASE_PASSWORD'
+    )  # some .env files used the wrong name; value is the anon/service key
+
+    # Migration only: local Postgres for /api/dgmts-static/data, /media, /functions/notify-subscribers
+    STATIC_DB_HOST = os.getenv('STATIC_DB_HOST', '127.0.0.1')
+    STATIC_DB_PORT = int(os.getenv('STATIC_DB_PORT', '5432'))
+    STATIC_DB_NAME = os.getenv('STATIC_DB_NAME', 'dgmts_static_db')
+    STATIC_DB_USER = os.getenv('STATIC_DB_USER', 'dgmts_static_user')
+    STATIC_DB_PASSWORD = os.getenv('STATIC_DB_PASSWORD')
+
+    # Public base URL of this Flask app (used for public media URLs, no trailing slash)
+    STATIC_APP_PUBLIC_BASE = os.getenv('STATIC_APP_PUBLIC_BASE', 'https://imsite.dullesgeotechnical.com')
+
+    # On-disk store for public uploaded images (replaces Supabase Storage buckets)
+    STATIC_MEDIA_DIR = os.getenv('STATIC_MEDIA_DIR', 'static_media')
+
+    BLOG_BASE_URL = os.getenv('BLOG_BASE_URL', 'https://dullesgeotechnical.com/blog')
+    ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', 'info@dullesgeotechnical.com')
     
     # JWT Configuration
     JWT_SECRET = os.environ['FLASK_SECRET_KEY']
