@@ -202,12 +202,15 @@ def static_data():
                 return jsonify({'data': None, 'error': {'message': 'patch required'}}), 400
             if not filters:
                 return jsonify({'data': None, 'error': {'message': 'At least one filter is required for update'}}), 400
-            params = []
-            where_sql = _where_clauses(filters, params)
             sets = []
+            set_params = []
             for k, v in patch.items():
                 sets.append(f'{_qident(k)} = %s')
-                params.append(v)
+                set_params.append(v)
+
+            where_params = []
+            where_sql = _where_clauses(filters, where_params)
+            params = set_params + where_params
             q = f'UPDATE {_qident(table)} SET {", ".join(sets)} WHERE {where_sql}'
             if want_returning:
                 q += ' RETURNING *'
