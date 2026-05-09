@@ -1,10 +1,13 @@
 """
-Migration stack: local Postgres + on-disk files. Does NOT replace /api/dgmts-static/send-mail,
-which continues to use DGMTS Static Supabase (see email_routes).
+Migration stack: local Postgres + on-disk object storage (Config.STATIC_MEDIA_DIR).
+This is your VPS “blob store”: each bucket is a subfolder; uploads are served read-only
+under /api/dgmts-static/media/... — no separate S3 account required.
+
+Does NOT replace /api/dgmts-static/send-mail, which continues to use DGMTS Static Supabase (email_routes).
 
 - POST /api/dgmts-static/data          — PostgREST-like CRUD (frontend dbClient shim when migrating)
 - POST /api/dgmts-static/functions/notify-subscribers
-- POST /api/dgmts-static/storage/<bucket>
+- POST /api/dgmts-static/storage/<bucket>   — multipart file + form field path
 - GET  /api/dgmts-static/media/<bucket>/<path:object_path>
 """
 
@@ -23,9 +26,12 @@ ALLOWED_TABLES = frozenset({
     'blogs', 'categories', 'news', 'events', 'subscribers', 'subscriber_groups',
     'subscriber_group_members', 'subscriber_newsletter_email_logs', 'email_config',
     'payments', 'payment_portal_users', 'dgmts_contact_persons', 'credentials',
+    'about_employees',
 })
 
-ALLOWED_BUCKETS = frozenset({'newsletter-images', 'blog-images', 'event-images'})
+ALLOWED_BUCKETS = frozenset({
+    'newsletter-images', 'blog-images', 'event-images', 'employee-images',
+})
 
 IDENT = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
