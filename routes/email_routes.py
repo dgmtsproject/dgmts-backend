@@ -1,6 +1,12 @@
 from flask import Blueprint, request, jsonify
 from services.email_service import send_email
-from services.alert_service import check_and_send_tiltmeter_alerts, check_and_send_seismograph_alert, check_and_send_smg3_seismograph_alert
+from services.alert_service import (
+    check_and_send_tiltmeter_alerts,
+    check_and_send_seismograph_alert,
+    check_and_send_smg3_seismograph_alert,
+    check_and_send_seismograph_instrument_13453_alert,
+    _check_single_syscom_background_instrument,
+)
 from services.connection_monitor_service import check_and_send_connection_lost_alerts
 from supabase import create_client, Client
 from config import Config
@@ -2448,7 +2454,7 @@ def test_seismograph_alert():
         # Get email addresses from request body
         data = request.get_json() or {}
         test_emails = data.get('emails', ['mahmerraza19@gmail.com'])
-        seismograph_type = data.get('type', 'SMG-1')  # Default to SMG-1
+        seismograph_type = str(data.get('type', 'SMG-1'))
         
         # Ensure test_emails is a list
         if isinstance(test_emails, str):
@@ -2456,23 +2462,26 @@ def test_seismograph_alert():
         elif not isinstance(test_emails, list):
             test_emails = ['mahmerraza19@gmail.com']
         
-        # Get instrument settings to verify it exists
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', seismograph_type).execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
             return jsonify({"error": f"No instrument found for {seismograph_type}"}), 404
         
-        # Call the actual alert service with custom emails
         if seismograph_type == 'SMG-1':
             check_and_send_seismograph_alert(custom_emails=test_emails)
         elif seismograph_type == 'SMG-3':
-            # Note: SMG-3 function doesn't have custom_emails parameter yet
             check_and_send_smg3_seismograph_alert()
+        elif seismograph_type == '13453':
+            instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', '13453').execute()
+            inst = instrument_resp.data[0] if instrument_resp.data else None
+            if not inst:
+                return jsonify({"error": "No instrument found for 13453"}), 404
+            _check_single_syscom_background_instrument(inst, custom_emails=test_emails)
         else:
-            return jsonify({"error": f"Unsupported seismograph type: {seismograph_type}"}), 400
+            return jsonify({"error": f"Unsupported seismograph type: {seismograph_type}. Use SMG-1, SMG-3, or 13453."}), 400
         
         return jsonify({
-            "message": f"Test seismograph alert sent successfully for {seismograph_type}",
+            "message": f"Test seismograph alert check run for {seismograph_type}",
             "emails_sent_to": test_emails,
             "instrument_id": seismograph_type
         }), 200
