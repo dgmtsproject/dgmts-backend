@@ -1935,7 +1935,7 @@ def test_tiltmeter_alert():
                 dt_utc = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                 est = pytz.timezone('US/Eastern')
                 dt_est = dt_utc.astimezone(est)
-                formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+                formatted_time = dt_est.strftime('%m-%d-%Y %I:%M %p EST')
             except Exception as e:
                 print(f"Failed to parse/convert timestamp: {timestamp}, error: {e}")
                 formatted_time = timestamp
@@ -2127,7 +2127,7 @@ def test_tiltmeter_alert():
         current_time = datetime.now(timezone.utc)
         est = pytz.timezone('US/Eastern')
         current_time_est = current_time.astimezone(est)
-        formatted_current_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+        formatted_current_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
         
         subject = f"🚨 Tiltmeter Alert Notification - {formatted_current_time}"
         
@@ -2297,7 +2297,7 @@ def test_tiltmeter_alert_simple():
                 dt_utc = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                 est = pytz.timezone('US/Eastern')
                 dt_est = dt_utc.astimezone(est)
-                formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+                formatted_time = dt_est.strftime('%m-%d-%Y %I:%M %p EST')
             except Exception as e:
                 formatted_time = timestamp
             
@@ -2413,9 +2413,9 @@ def test_tiltmeter_alert_simple():
             # Format current time for subject
             try:
                 current_time = datetime.now(pytz.timezone('US/Eastern'))
-                formatted_current_time = current_time.strftime('%Y-%m-%d %I:%M %p EST')
+                formatted_current_time = current_time.strftime('%m-%d-%Y %I:%M %p EST')
             except Exception as e:
-                formatted_current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+                formatted_current_time = datetime.now(timezone.utc).strftime('%m-%d-%Y %H:%M UTC')
             
             subject = f"🚨 Tiltmeter Alert Notification - {formatted_current_time}"
             
@@ -2525,7 +2525,7 @@ def test_rock_seismograph_alert():
                     "<b>Test Warning threshold reached on Y-axis:</b> 0.002345",
                     "<b>Test Shutdown threshold reached on Z-axis:</b> 0.003456"
                 ],
-                'timestamp': datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d %I:%M %p EST'),
+                'timestamp': datetime.now(pytz.timezone('US/Eastern')).strftime('%m-%d-%Y %I:%M %p EST'),
                 'max_values': {'X': 0.001234, 'Y': 0.002345, 'Z': 0.003456}
             }
         }
@@ -2654,7 +2654,7 @@ def test_rock_seismograph_alert():
         
         current_time = datetime.now(timezone.utc)
         current_time_est = current_time.astimezone(pytz.timezone('US/Eastern'))
-        formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+        formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
         subject = f"🌊 {seismograph_name} Test Alert Notification - {formatted_time}"
         
         if send_email(test_emails, subject, body):
@@ -2775,7 +2775,7 @@ def test_dullesgeotechnical_mail():
                         <p>📧 <strong>From:</strong> {from_name}</p>
                         <p>📬 <strong>Sender Email:</strong> {provider_email}</p>
                         <p>📨 <strong>Recipient:</strong> {recipient_email}</p>
-                        <p>🕒 <strong>Sent At:</strong> {datetime.now(pytz.timezone('US/Eastern')).strftime('%Y-%m-%d %I:%M:%S %p EST')}</p>
+                        <p>🕒 <strong>Sent At:</strong> {datetime.now(pytz.timezone('US/Eastern')).strftime('%m-%d-%Y %I:%M:%S %p EST')}</p>
                     </div>
                     
                     <p>If you received this email, your SMTP configuration is set up correctly and ready to send alert notifications.</p>

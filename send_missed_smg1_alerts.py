@@ -278,7 +278,7 @@ def send_missed_smg1_alerts(instrument_id='SMG-1', days_back=3, custom_emails=No
             try:
                 dt_utc = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                 dt_est = dt_utc.astimezone(est)
-                formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+                formatted_time = dt_est.strftime('%m-%d-%Y %I:%M %p EST')
             except:
                 formatted_time = hour_key.replace('-', ' ')
             

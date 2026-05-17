@@ -342,7 +342,7 @@ def check_and_send_tiltmeter_alerts():
                     dt_utc = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                     est = pytz.timezone('US/Eastern')
                     dt_est = dt_utc.astimezone(est)
-                    formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+                    formatted_time = dt_est.strftime('%m-%d-%Y %I:%M %p EST')
                 except Exception as e:
                     print(f"Failed to parse/convert timestamp: {timestamp}, error: {e}")
                     formatted_time = timestamp
@@ -462,7 +462,7 @@ def check_and_send_tiltmeter_alerts():
             current_time = datetime.now(timezone.utc)
             est = pytz.timezone('US/Eastern')
             current_time_est = current_time.astimezone(est)
-            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
             subject = f"🚨 Tiltmeter Alert Notification - {formatted_time}"
             
             # Collect all emails from all instruments
@@ -806,7 +806,7 @@ def _check_single_syscom_background_instrument(instrument, custom_emails=None):
 
     current_time = datetime.now(timezone.utc)
     current_time_est = current_time.astimezone(est_tz)
-    formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+    formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
     subject = f"🌊 Seismograph Alert — {instrument_id_str} — {formatted_time}"
 
     all_emails = set(alert_emails + warning_emails + shutdown_emails)
@@ -1002,7 +1002,7 @@ def check_and_send_seismograph_alert(custom_emails=None):
 
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est_tz)
-            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
             subject = f"🌊 Seismograph Alert Notification - {formatted_time}"
 
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
@@ -1144,7 +1144,7 @@ def check_and_send_smg3_seismograph_alert():
 
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est_tz)
-            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
             subject = f"🌊 ANC DAR-BC Seismograph Alert Notification - {formatted_time}"
 
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
@@ -1283,7 +1283,7 @@ def _create_seismograph_email_body(alerts_by_timestamp, seismograph_name, projec
             dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
             est = pytz.timezone('US/Eastern')
             dt_est = dt_utc.astimezone(est)
-            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
+            formatted_time = dt_est.strftime('%m-%d-%Y %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']

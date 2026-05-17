@@ -282,7 +282,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est_tz)
-            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
             subject = f"🌊 {seismograph_name} Alert Notification - {formatted_time}"
             
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
@@ -405,7 +405,7 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
             dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
             est_tz = pytz.timezone('US/Eastern')
             dt_est = dt_utc.astimezone(est_tz)
-            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
+            formatted_time = dt_est.strftime('%m-%d-%Y %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']
@@ -685,7 +685,7 @@ def check_and_send_rock_seismograph_alert_test(instrument_id):
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est_tz)
-            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
             subject = f"[TEST] 🌊 {seismograph_name} Alert Notification - {formatted_time}"
             
             all_emails = set(alert_emails + warning_emails + shutdown_emails)

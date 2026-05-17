@@ -648,7 +648,7 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
             current_time = datetime.now(timezone.utc)
             est_tz = pytz.timezone('US/Eastern')
             current_time_est = current_time.astimezone(est_tz)
-            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
             subject = f"📊 Instantel 2 (UM16368) Alert Notification - {formatted_time}"
             
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
@@ -784,7 +784,7 @@ def _create_instantel2_email_body(alerts_by_timestamp, project_name, instrument_
             dt_naive = datetime.strptime(alert_data['timestamp'], '%Y-%m-%d %H:%M:%S')
             est_tz = pytz.timezone('US/Eastern')
             dt_est = est_tz.localize(dt_naive)
-            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
+            formatted_time = dt_est.strftime('%m-%d-%Y %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']
@@ -959,7 +959,7 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
             dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
             est = pytz.timezone('US/Eastern')
             dt_est = dt_utc.astimezone(est)
-            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
+            formatted_time = dt_est.strftime('%m-%d-%Y %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']
