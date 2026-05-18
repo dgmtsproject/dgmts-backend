@@ -400,12 +400,10 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
     
     # Add alerts for each timestamp
     for timestamp, alert_data in alerts_by_timestamp.items():
-        # Format timestamp to EST
+        # Format timestamp to real US/Eastern (handles Syscom's fixed UTC-5 instrument clock)
         try:
-            dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
-            est_tz = pytz.timezone('US/Eastern')
-            dt_est = dt_utc.astimezone(est_tz)
-            formatted_time = dt_est.strftime('%m-%d-%Y %I:%M:%S %p EST')
+            from services.alert_service import _format_syscom_timestamp_to_est
+            formatted_time = _format_syscom_timestamp_to_est(alert_data['timestamp'])
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']
