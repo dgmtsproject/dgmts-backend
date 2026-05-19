@@ -93,15 +93,13 @@ def send_missed_smg1_alerts(instrument_id='SMG-1', days_back=3, custom_emails=No
         # Calculate time range
         est = pytz.timezone('US/Eastern')
         now_est = datetime.now(est)
-        # Account for instrument clock being 1 hour behind EST
-        now_instrument_time = now_est - timedelta(hours=1)
-        start_date = now_instrument_time - timedelta(days=days_back)
-        
-        # Format dates for API (using instrument time which is 1 hour behind EST)
+        # Syscom returns tz-aware timestamps in real US/Eastern, so query up to "now".
+        start_date = now_est - timedelta(days=days_back)
+
         start_time = start_date.strftime('%Y-%m-%dT%H:%M:%S')
-        end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
-        
-        print(f"📅 Checking data from {start_time} to {end_time} EST (instrument time)")
+        end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
+
+        print(f"📅 Checking data from {start_time} to {end_time} EST")
         
         # Fetch historical data from Syscom API
         api_key = os.environ.get('SYSCOM_API_KEY')

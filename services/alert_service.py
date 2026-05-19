@@ -37,21 +37,17 @@ from .email_service import send_email
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
-SYSCOM_INSTRUMENT_FIXED_OFFSET = timezone(timedelta(hours=-5))
-
-
 def _format_syscom_timestamp_to_est(timestamp_str, fmt='%m-%d-%Y %I:%M:%S %p EST'):
     """Format a Syscom-API timestamp string for display in real US/Eastern time.
 
-    Syscom instrument clocks are configured to a fixed UTC-5 offset (i.e. EST
-    without DST). The API returns timestamps in that instrument-local clock,
-    typically as a naive ISO-8601 string. Treating that naive string as the
-    server's local time produces a value that is 1 hour behind real US/Eastern
-    during EDT (and matches real US/Eastern during EST).
+    The Syscom API returns tz-aware ISO-8601 timestamps in real US/Eastern with
+    the correct DST offset (e.g. ``"2026-05-19T13:46:22.716-04:00"`` during EDT,
+    or ``"...-05:00"`` during EST), so converting to ``US/Eastern`` displays the
+    moment the threshold was actually reached on the instrument.
 
-    This helper attaches the fixed UTC-5 offset to naive timestamps before
-    converting to ``US/Eastern`` (which auto-handles DST), so the displayed
-    time always matches real local time in Kennesaw, GA / EDT.
+    Naive inputs (no offset) are treated as already being in real US/Eastern,
+    which matches the API's behavior; running on a VM configured to
+    ``America/New_York`` keeps this consistent regardless of DST.
 
     Returns ``None`` if the input is empty/falsy. Raises on bad input so callers
     can fall back to the raw string in their existing ``try/except`` blocks.
@@ -60,9 +56,10 @@ def _format_syscom_timestamp_to_est(timestamp_str, fmt='%m-%d-%Y %I:%M:%S %p EST
         return None
     cleaned = timestamp_str.replace('Z', '+00:00') if timestamp_str.endswith('Z') else timestamp_str
     dt = datetime.fromisoformat(cleaned)
+    est_tz = pytz.timezone('US/Eastern')
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=SYSCOM_INSTRUMENT_FIXED_OFFSET)
-    dt_est = dt.astimezone(pytz.timezone('US/Eastern'))
+        dt = est_tz.localize(dt)
+    dt_est = dt.astimezone(est_tz)
     return dt_est.strftime(fmt)
 
 
@@ -704,15 +701,16 @@ def _check_single_syscom_background_instrument(instrument, custom_emails=None):
     utc_now = datetime.now(timezone.utc)
     est_tz = pytz.timezone('US/Eastern')
     now_est = utc_now.astimezone(est_tz)
-    now_instrument_time = now_est - timedelta(hours=1)
-    six_hours_ago_instrument_time = now_instrument_time - timedelta(hours=6)
+    # Syscom now returns tz-aware timestamps in real US/Eastern (e.g. ...-04:00 during EDT),
+    # so query right up to "now" — no legacy 1-hour offset needed.
+    six_hours_ago_est = now_est - timedelta(hours=6)
 
-    start_time = six_hours_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
-    end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
+    start_time = six_hours_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+    end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
 
     print(
         f"[{instrument_id_str}] Syscom device {device_id}: fetching background {start_time} → {end_time} "
-        f"(instrument clock ~1h behind EST, 6h window)"
+        f"(real US/Eastern, 6h window)"
     )
 
     api_key = os.environ.get('SYSCOM_API_KEY') or Config.SYSCOM_API_KEY
@@ -899,16 +897,15 @@ def check_and_send_seismograph_alert(custom_emails=None):
         utc_now = datetime.now(timezone.utc)
         est_tz = pytz.timezone('US/Eastern')
         now_est = utc_now.astimezone(est_tz)
-        now_instrument_time = now_est - timedelta(hours=1)
-        six_hours_ago_instrument_time = now_instrument_time - timedelta(hours=6)
+        # Syscom returns tz-aware timestamps in real US/Eastern, so query up to "now".
+        six_hours_ago_est = now_est - timedelta(hours=6)
 
-        start_time = six_hours_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
-        end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
+        start_time = six_hours_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
 
         print(f"Fetching SMG-1 seismograph data from {start_time} to {end_time} EST (last 6 hours)")
         print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
         print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
-        print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
 
         api_key = os.environ.get('SYSCOM_API_KEY')
         if not api_key:
@@ -1084,16 +1081,15 @@ def check_and_send_smg3_seismograph_alert():
         utc_now = datetime.now(timezone.utc)
         est_tz = pytz.timezone('US/Eastern')
         now_est = utc_now.astimezone(est_tz)
-        now_instrument_time = now_est - timedelta(hours=1)
-        one_minute_ago_instrument_time = now_instrument_time - timedelta(minutes=1)
+        # Syscom returns tz-aware timestamps in real US/Eastern, so query up to "now".
+        one_minute_ago_est = now_est - timedelta(minutes=1)
 
-        start_time = one_minute_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
-        end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
+        start_time = one_minute_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
 
         print(f"Fetching SMG-3 seismograph data from {start_time} to {end_time} EST")
         print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
         print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
-        print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
 
         api_key = os.environ.get('SYSCOM_API_KEY')
         if not api_key:
