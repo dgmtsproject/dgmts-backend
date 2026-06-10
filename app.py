@@ -14,6 +14,8 @@ from routes.dgmts_static_routes import dgmts_static_bp
 # Create Flask app instance
 app = Flask(__name__)
 
+# comment added by zainabfatima
+
 # Configure app
 app.config.from_object(Config)
 
