@@ -10,6 +10,7 @@ from services.alert_service import (
 from services.rock_seismograph_service import check_and_send_rock_seismograph_alert
 # Note: check_and_send_rock_seismograph_alert_test is only for local testing via test.py
 from services.micromate_service import check_and_send_micromate_alert, check_and_send_instantel2_alert
+from services.duration_alert_service import check_and_send_all_duration_alerts
 from config import Config
 
 def run_scheduler():
@@ -32,6 +33,7 @@ def setup_scheduled_tasks():
     schedule.every().minute.do(check_and_send_seismograph_instrument_13453_alert)
     schedule.every().minute.do(check_and_send_micromate_alert)
     schedule.every().minute.do(check_and_send_instantel2_alert)
+    schedule.every().minute.do(check_and_send_all_duration_alerts)
     
     # Tiltmeter alerts are now triggered automatically when new data is inserted
     # No need for scheduled tiltmeter checks
