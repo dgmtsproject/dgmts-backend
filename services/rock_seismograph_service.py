@@ -5,7 +5,7 @@ import pytz
 from supabase import create_client, Client
 from config import Config
 from .email_service import send_email
-from .instrument_utils import is_instrument_active
+from .instrument_utils import is_instrument_active, get_display_instrument_id
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
@@ -56,7 +56,7 @@ def get_project_info(instrument_id):
             'project_id': project_id,
             'project_name': 'Unknown Project',
             'project_description': '',
-            'instrument_id': instrument_id,
+            'instrument_id': get_display_instrument_id(instrument),
             'instrument_name': instrument.get('instrument_name', 'Unknown Instrument'),
             'serial_number': instrument.get('sno', 'N/A'),
             'instrument_location': instrument.get('instrument_location', 'N/A')
@@ -317,6 +317,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
 
 def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, project_name, instrument_id, instrument_details):
     """Create HTML email body for Rock Seismograph alerts"""
+    display_id = instrument_details[0]['instrument_id'] if instrument_details else instrument_id
     body = f"""
     <html>
     <head>
@@ -395,7 +396,7 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
                 
         <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
             This is an automated alert notification from the DGMTS monitoring system. 
-            The following {seismograph_name} ({instrument_id}) thresholds have been exceeded in real-time:
+            The following {seismograph_name} ({display_id}) thresholds have been exceeded in real-time:
         </p>
     """
     
@@ -427,7 +428,7 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
         
         body += f"""
                 <div class="alert-section">
-                    <h3>📊 Rock Seismograph Alert - {seismograph_name} ({instrument_id})</h3>
+                    <h3>📊 Rock Seismograph Alert - {seismograph_name} ({display_id})</h3>
                     <div class="{alert_class}">
                         <div class="timestamp">{formatted_time}</div>
                         <div class="alert-message">{consolidated_messages}</div>
@@ -467,7 +468,7 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
                 Values shown are the actual readings that exceeded thresholds.
                 <br><br>
                 <strong>Project:</strong> {project_name}<br>
-                <strong>Instrument:</strong> {instrument_id}
+                <strong>Instrument:</strong> {display_id}
             </p>
                 </div>
             </div>

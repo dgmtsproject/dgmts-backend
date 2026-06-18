@@ -16,6 +16,7 @@ from supabase import create_client
 from config import Config
 from services.alert_service import get_project_info, log_alert_event, _legacy_syscom_device_id
 from services.email_service import send_email
+from services.instrument_utils import get_display_instrument_id
 
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
@@ -332,7 +333,7 @@ def _format_event_time(ts_str):
 
 def _create_duration_email_body(instrument, events, project_name):
     instrument_id = instrument.get('instrument_id', '')
-    display_id = instrument.get('instrument_id_second') or instrument_id
+    display_id = get_display_instrument_id(instrument)
     display_name = instrument.get('instrument_name') or display_id
     location = instrument.get('instrument_location') or 'N/A'
 
@@ -412,7 +413,7 @@ def check_duration_alerts_for_instrument(instrument):
 
     est_tz = pytz.timezone('US/Eastern')
     now_est = datetime.now(timezone.utc).astimezone(est_tz).strftime('%m-%d-%Y %I:%M %p EST')
-    display_id = instrument.get('instrument_id_second') or instrument_id
+    display_id = get_display_instrument_id(instrument)
 
     for alert_type, type_events in pending_by_type.items():
         emails = _emails_for_duration_event(instrument, alert_type)

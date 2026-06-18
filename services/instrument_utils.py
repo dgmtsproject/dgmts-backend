@@ -4,6 +4,15 @@ from supabase import create_client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
 
+def get_display_instrument_id(instrument) -> str:
+    """Return the user-facing instrument ID (instrument_id_second) when set."""
+    if not instrument:
+        return ''
+    if isinstance(instrument, dict):
+        return instrument.get('instrument_id_second') or instrument.get('instrument_id', '')
+    return str(instrument).strip()
+
+
 def is_instrument_active(instrument_id: str) -> bool:
     """Return False when instrument monitoring is turned off in the app."""
     try:

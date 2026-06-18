@@ -7,7 +7,7 @@ import pytz
 from supabase import create_client, Client
 from config import Config
 from .email_service import send_email
-from .instrument_utils import is_instrument_active
+from .instrument_utils import is_instrument_active, get_display_instrument_id
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
@@ -67,7 +67,7 @@ def get_project_info(instrument_id):
             'project_id': project_id,
             'project_name': 'Unknown Project',
             'project_description': '',
-            'instrument_id': instrument_id,
+            'instrument_id': get_display_instrument_id(instrument),
             'instrument_name': instrument.get('instrument_name', 'Unknown Instrument'),
             'serial_number': instrument.get('sno', 'N/A'),
             'instrument_location': instrument.get('instrument_location', 'N/A')
@@ -772,6 +772,7 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
 
 def _create_instantel2_email_body(alerts_by_timestamp, project_name, instrument_details):
     """Create HTML email body for Instantel 2 (UM16368) alerts"""
+    display_id = instrument_details[0]['instrument_id'] if instrument_details else 'Instantel 2 (UM16368)'
     body = f"""
     <html>
     <head>
@@ -919,7 +920,7 @@ def _create_instantel2_email_body(alerts_by_timestamp, project_name, instrument_
                 </div>
         """
     
-    body += """
+    body += f"""
                 <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
                     <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
                     <p style="margin: 5px 0 0 0; color: #495057;">
@@ -927,7 +928,7 @@ def _create_instantel2_email_body(alerts_by_timestamp, project_name, instrument_
                         Values shown are the actual readings that exceeded thresholds.
                         <br><br>
                         <strong>Project ID:</strong> 24252<br>
-                        <strong>Instrument:</strong> Instantel 2 (UM16368)
+                        <strong>Instrument:</strong> {display_id}
                     </p>
                 </div>
             </div>
@@ -947,6 +948,7 @@ def _create_instantel2_email_body(alerts_by_timestamp, project_name, instrument_
 
 def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_details):
     """Create HTML email body for Micromate alerts"""
+    display_id = instrument_details[0]['instrument_id'] if instrument_details else 'Instantel 1'
     body = f"""
     <html>
     <head>
@@ -1094,7 +1096,7 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
                 </div>
         """
     
-    body += """
+    body += f"""
                 <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
                     <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
                     <p style="margin: 5px 0 0 0; color: #495057;">
@@ -1102,7 +1104,7 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
                         Values shown are the actual readings that exceeded thresholds.
                         <br><br>
                         <strong>Project ID:</strong> 24252<br>
-                        <strong>Instrument:</strong> Instantel 1
+                        <strong>Instrument:</strong> {display_id}
                     </p>
                 </div>
             </div>

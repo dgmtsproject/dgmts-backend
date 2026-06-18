@@ -33,7 +33,7 @@ import pytz
 from supabase import create_client, Client
 from config import Config
 from .email_service import send_email
-from .instrument_utils import is_instrument_active
+from .instrument_utils import is_instrument_active, get_display_instrument_id
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
@@ -212,7 +212,7 @@ def get_project_info(instrument_id):
             'project_id': project_id,
             'project_name': 'Unknown Project',
             'project_description': '',
-            'instrument_id': instrument_id,
+            'instrument_id': get_display_instrument_id(instrument),
             'instrument_name': instrument.get('instrument_name', 'Unknown Instrument'),
             'serial_number': instrument.get('sno', 'N/A'),
             'instrument_location': instrument.get('instrument_location', 'N/A')
@@ -825,6 +825,7 @@ def _check_single_syscom_background_instrument(instrument, custom_emails=None):
         log_alert_event("ERROR", f"get_project_info failed: {e}", instrument_id_str)
 
     display_name = instrument.get('instrument_name') or 'Seismograph'
+    display_id = get_display_instrument_id(instrument)
     body = _create_seismograph_email_body(
         alerts_by_timestamp,
         display_name,
@@ -835,7 +836,7 @@ def _check_single_syscom_background_instrument(instrument, custom_emails=None):
     current_time = datetime.now(timezone.utc)
     current_time_est = current_time.astimezone(est_tz)
     formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
-    subject = f"🌊 Seismograph Alert — {instrument_id_str} — {formatted_time}"
+    subject = f"🌊 Seismograph Alert — {display_id} — {formatted_time}"
 
     all_emails = set(alert_emails + warning_emails + shutdown_emails)
     if not all_emails:

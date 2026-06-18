@@ -8,6 +8,7 @@ from services.alert_service import (
     _check_single_syscom_background_instrument,
 )
 from services.connection_monitor_service import check_and_send_connection_lost_alerts
+from services.instrument_utils import get_display_instrument_id
 from supabase import create_client, Client
 from config import Config
 from datetime import datetime, timezone
@@ -2513,9 +2514,10 @@ def test_rock_seismograph_alert():
         
         # Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
-        instrument = instrument_resp.data[0] if instrument_resp.data else None
-        if not instrument:
+        if not instrument_resp.data:
             return jsonify({"error": f"No instrument found for {instrument_id}"}), 404
+        instrument = instrument_resp.data[0]
+        display_id = get_display_instrument_id(instrument)
         
         # Create test alert data
         test_alerts = {
@@ -2572,7 +2574,7 @@ def test_rock_seismograph_alert():
                 <div class="content">
                     <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                         This is a <strong>TEST</strong> alert notification from the DGMTS monitoring system. 
-                        The following {seismograph_name} ({instrument_id}) thresholds have been exceeded:
+                        The following {seismograph_name} ({display_id}) thresholds have been exceeded:
                     </p>
         """
         
@@ -2580,7 +2582,7 @@ def test_rock_seismograph_alert():
         for hour_key, alert_data in test_alerts.items():
             body += f"""
                     <div class="alert-section">
-                        <h3>📊 Hour: {hour_key.replace('_', ' ').title()} - {seismograph_name} Alerts ({instrument_id})</h3>
+                        <h3>📊 Hour: {hour_key.replace('_', ' ').title()} - {seismograph_name} Alerts ({display_id})</h3>
             """
             
             for message in alert_data['messages']:
@@ -2636,7 +2638,7 @@ def test_rock_seismograph_alert():
                             This is a test email to verify the alert system is working correctly.
                             <br><br>
                             <strong>Project:</strong> {project_name}<br>
-                            <strong>Instrument:</strong> {instrument_id}
+                            <strong>Instrument:</strong> {display_id}
                         </p>
                     </div>
                 </div>
