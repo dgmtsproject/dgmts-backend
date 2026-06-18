@@ -33,6 +33,7 @@ import pytz
 from supabase import create_client, Client
 from config import Config
 from .email_service import send_email
+from .instrument_utils import is_instrument_active
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
@@ -638,6 +639,10 @@ def check_and_send_seismograph_alert(custom_emails=None):
     """
     print("Checking seismograph alerts using background API...")
     try:
+        if not is_instrument_active('SMG-1'):
+            print("SMG-1 is inactive; skipping seismograph alert check.")
+            return
+
         # 1. Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG-1').execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
@@ -851,6 +856,10 @@ def check_and_send_smg3_seismograph_alert():
     """Check SMG-3 seismograph alerts and send emails if thresholds are exceeded"""
     print("Checking SMG-3 seismograph alerts using background API...")
     try:
+        if not is_instrument_active('SMG-3'):
+            print("SMG-3 is inactive; skipping seismograph alert check.")
+            return
+
         # 1. Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG-3').execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None

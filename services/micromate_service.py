@@ -7,6 +7,7 @@ import pytz
 from supabase import create_client, Client
 from config import Config
 from .email_service import send_email
+from .instrument_utils import is_instrument_active
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
@@ -135,6 +136,11 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
         'skipped_timestamps': []
     }
     try:
+        if not is_instrument_active('Instantel 1'):
+            print("Instantel 1 is inactive; skipping Micromate alert check.")
+            result_summary['skipped'] = 'Instrument inactive'
+            return result_summary
+
         # 1. Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'Instantel 1').execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
@@ -443,7 +449,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
 
 def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720, force_resend=False):
     """Check Instantel 2 (UM16368) alerts and send emails if thresholds are exceeded
-    
+           Also sends an alert if no new data is received for 1 hour
+
     Args:
         custom_emails (list, optional): Custom email addresses to use instead of instrument emails
         time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 720 minutes (12 hours).
@@ -465,12 +472,20 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
         'readings_already_sent': 0,
         'emails_sent': 0,
         'alert_timestamps': [],
-        'skipped_timestamps': []
+        'skipped_timestamps': [],
+        'inactivity_alert_sent': False
     }
+
     try:
+        if not is_instrument_active('Instantel 2'):
+            print("Instantel 2 is inactive; skipping UM16368 alert check.")
+            result_summary['skipped'] = 'Instrument inactive'
+            return result_summary
+
         # 1. Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'Instantel 2').execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None
+
         if not instrument:
             print("No instrument found for Instantel 2")
             log_alert_event("ERROR", f"In check_and_send_instantel2_alert: No instrument found for Instantel 2", 'Instantel 2')
@@ -481,7 +496,7 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
         alert_value = instrument.get('alert_value')
         warning_value = instrument.get('warning_value')
         shutdown_value = instrument.get('shutdown_value')
-        
+
         alert_emails = instrument.get('alert_emails') or []
         warning_emails = instrument.get('warning_emails') or []
         shutdown_emails = instrument.get('shutdown_emails') or []
@@ -492,6 +507,13 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
             warning_emails = custom_emails
             shutdown_emails = custom_emails
             print(f"Using custom emails for test: {custom_emails}")
+
+        all_emails = set(alert_emails + warning_emails + shutdown_emails)
+        all_emails.add('dgmts.project@gmail.com')
+
+        # if not all_emails:
+        #     print('No alert emails configured for Instantel 2')
+        #     return result_summary
 
         # 2. Calculate time range for checking alerts
         utc_now = datetime.now(timezone.utc)
@@ -516,9 +538,11 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
         # Format dates for API (YYYY-MM-DD HH:MM:SS format for more precise filtering)
         from_date = start_time.strftime('%Y-%m-%d %H:%M:%S')
         to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
-        
+
+        # 3. Fetch UM16368 data
         url = f"https://imsite.dullesgeotechnical.com/api/micromate/UM16368/readings?fromdatetime={from_date}&todatetime={to_date}"
         response = requests.get(url)
+
         if response.status_code != 200:
             print(f"Failed to fetch UM16368 data: {response.status_code} {response.text}")
             log_alert_event("ERROR", f"Failed to fetch UM16368 data: {response.status_code} {response.text}", 'Instantel 2')
@@ -536,9 +560,59 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
             result_summary['error'] = "No UM16368 data received"
             return result_summary
 
+        # --------------------------------------------------
+        # 4. NO DATA INACTIVITY CHECK (1 HOUR)
+        # --------------------------------------------------
+        latest_time_str = um16368_readings[-1]['Time']
+        dt_naive = datetime.strptime(latest_time_str, '%Y-%m-%d %H:%M:%S')
+        dt_est = est_tz.localize(dt_naive)
+        dt_utc = dt_est.astimezone(timezone.utc)
+
+        minutes_since_last = (utc_now - dt_utc).total_seconds() / 60
+
+        if minutes_since_last >= 60:
+            already_sent = supabase.table('sent_alerts') \
+                .select('id') \
+                .eq('instrument_id', 'Instantel 2') \
+                .eq('alert_type', 'NO_DATA_1_HOUR') \
+                .execute()
+
+            if not already_sent.data:
+                subject = '⚠️ Instantel 2 – No Data Received for 1 Hour'
+                body = f'''
+                <p>No UM16368 data has been received for <b>Instantel 2</b>.</p>
+                <p>Last data timestamp:
+                <b>{dt_est.strftime('%Y-%m-%d %I:%M %p EST')}</b></p>
+                <p>Please check instrument power, connectivity, or API status.</p>
+                '''
+
+                email_sent = send_email(','.join(all_emails), subject, body)
+                if email_sent:
+                    supabase.table('sent_alerts').insert({
+                        'instrument_id': 'Instantel 2',
+                        'node_id': 24252,
+                        'timestamp': latest_time_str,
+                        'alert_type': 'NO_DATA_1_HOUR'
+                    }).execute()
+
+                    log_alert_event('EMAIL_SENT', 'No data inactivity alert sent', 'Instantel 2')
+                    result_summary['inactivity_alert_sent'] = True
+
+            return result_summary
+
+        # Clear inactivity alert if data resumed
+        supabase.table('sent_alerts') \
+            .delete() \
+            .eq('instrument_id', 'Instantel 2') \
+            .eq('alert_type', 'NO_DATA_1_HOUR') \
+            .execute()
+
+        # --------------------------------------------------
+        # 5. Threshold checks (original logic)
+        # Check thresholds for readings within the time window
+        # --------------------------------------------------
         print(f"Received {len(um16368_readings)} UM16368 data points")
 
-        # 4. Check thresholds for readings within the time window
         # Filter readings within the specified time window (accounting for instrument time offset)
         alerts_by_timestamp = {}
         
@@ -590,6 +664,7 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
                     .eq('node_id', 24252) \
                     .eq('timestamp', timestamp_str) \
                     .execute()
+
                 if already_sent.data:
                     print(f"Instantel 2 alert already sent for timestamp {timestamp_str}, skipping.")
                     result_summary['readings_already_sent'] += 1
@@ -652,6 +727,8 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
             subject = f"📊 Instantel 2 (UM16368) Alert Notification - {formatted_time}"
             
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
+            all_emails.add('dgmts.project@gmail.com')
+
             if all_emails:
                 email_sent = send_email(",".join(all_emails), subject, body)
                 if email_sent:

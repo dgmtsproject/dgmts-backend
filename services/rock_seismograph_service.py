@@ -5,6 +5,7 @@ import pytz
 from supabase import create_client, Client
 from config import Config
 from .email_service import send_email
+from .instrument_utils import is_instrument_active
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
@@ -94,6 +95,10 @@ def check_and_send_rock_seismograph_alert(instrument_id):
     """Check Rock Seismograph alerts and send emails if thresholds are exceeded"""
     print(f"Checking {instrument_id} Rock Seismograph alerts using background API...")
     try:
+        if not is_instrument_active(instrument_id):
+            print(f"{instrument_id} is inactive; skipping Rock Seismograph alert check.")
+            return
+
         # 1. Get instrument settings
         instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', instrument_id).execute()
         instrument = instrument_resp.data[0] if instrument_resp.data else None

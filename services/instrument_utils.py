@@ -1,0 +1,24 @@
+from config import Config
+from supabase import create_client
+
+supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+
+
+def is_instrument_active(instrument_id: str) -> bool:
+    """Return False when instrument monitoring is turned off in the app."""
+    try:
+        resp = (
+            supabase.table('instruments')
+            .select('is_active')
+            .eq('instrument_id', instrument_id)
+            .execute()
+        )
+        if not resp.data:
+            return True
+        value = resp.data[0].get('is_active')
+        if value is None:
+            return True
+        return bool(value)
+    except Exception as e:
+        print(f"Could not read is_active for {instrument_id}: {e}")
+        return True
