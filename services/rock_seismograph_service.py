@@ -117,23 +117,19 @@ def check_and_send_rock_seismograph_alert(instrument_id):
         shutdown_emails = instrument.get('shutdown_emails') or []
 
         # 2. Calculate time range for the last 6 hours using UTC and convert to EST properly
-        # Account for instrument clock being 1 hour behind EST
-        # Using 6 hours to avoid missing alerts due to scheduler timing issues
+        # Syscom returns tz-aware timestamps in real US/Eastern, so query up to "now".
+        # Using a 6h window to absorb any short-term scheduler timing/publish lag.
         utc_now = datetime.now(timezone.utc)
         est_tz = pytz.timezone('US/Eastern')
         now_est = utc_now.astimezone(est_tz)
-        # Subtract 1 hour to account for instrument clock being behind
-        now_instrument_time = now_est - timedelta(hours=1)
-        six_hours_ago_instrument_time = now_instrument_time - timedelta(hours=6)
-        
-        # Format dates for API (using instrument time which is 1 hour behind EST)
-        start_time = six_hours_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
-        end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
-        
+        six_hours_ago_est = now_est - timedelta(hours=6)
+
+        start_time = six_hours_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
+
         print(f"Fetching {instrument_id} Rock Seismograph data from {start_time} to {end_time} EST (last 6 hours)")
         print(f"UTC time: {utc_now.strftime('%Y-%m-%dT%H:%M:%S')} UTC")
         print(f"EST time: {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST")
-        print(f"Instrument time (1hr behind): {now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')} EST")
 
         # 3. Fetch background data from Syscom API
         api_key = os.environ.get('SYSCOM_API_KEY')
@@ -287,7 +283,7 @@ def check_and_send_rock_seismograph_alert(instrument_id):
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est_tz)
-            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
             subject = f"🌊 {seismograph_name} Alert Notification - {formatted_time}"
             
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
@@ -405,12 +401,10 @@ def _create_rock_seismograph_email_body(alerts_by_timestamp, seismograph_name, p
     
     # Add alerts for each timestamp
     for timestamp, alert_data in alerts_by_timestamp.items():
-        # Format timestamp to EST
+        # Format timestamp to real US/Eastern (handles Syscom's fixed UTC-5 instrument clock)
         try:
-            dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
-            est_tz = pytz.timezone('US/Eastern')
-            dt_est = dt_utc.astimezone(est_tz)
-            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
+            from services.alert_service import _format_syscom_timestamp_to_est
+            formatted_time = _format_syscom_timestamp_to_est(alert_data['timestamp'])
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
             formatted_time = alert_data['timestamp']
@@ -524,19 +518,16 @@ def check_and_send_rock_seismograph_alert_test(instrument_id):
     
         print(f"[TEST] Sending to test email: {test_email}")
 
-        # 2. Calculate time range for the last 6 hours using UTC and convert to EST properly
-        # Account for instrument clock being 1 hour behind EST
+        # 2. Calculate time range for the last 6 hours in real US/Eastern.
+        # Syscom returns tz-aware timestamps in real US/Eastern, so query up to "now".
         utc_now = datetime.now(timezone.utc)
         est_tz = pytz.timezone('US/Eastern')
         now_est = utc_now.astimezone(est_tz)
-        # Subtract 1 hour to account for instrument clock being behind
-        now_instrument_time = now_est - timedelta(hours=1)
-        six_hours_ago_instrument_time = now_instrument_time - timedelta(hours=6)
-        
-        # Format dates for API (using instrument time which is 1 hour behind EST)
-        start_time = six_hours_ago_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
-        end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
-        
+        six_hours_ago_est = now_est - timedelta(hours=6)
+
+        start_time = six_hours_ago_est.strftime('%Y-%m-%dT%H:%M:%S')
+        end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
+
         print(f"[TEST] Fetching {instrument_id} Rock Seismograph data from {start_time} to {end_time} EST (last 6 hours)")
 
         # 3. Fetch background data from Syscom API
@@ -690,7 +681,7 @@ def check_and_send_rock_seismograph_alert_test(instrument_id):
             
             current_time = datetime.now(timezone.utc)
             current_time_est = current_time.astimezone(est_tz)
-            formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+            formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
             subject = f"[TEST] 🌊 {seismograph_name} Alert Notification - {formatted_time}"
             
             all_emails = set(alert_emails + warning_emails + shutdown_emails)

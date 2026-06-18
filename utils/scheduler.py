@@ -2,10 +2,15 @@ import schedule
 import time
 import threading
 from services.sensor_service import fetch_and_store_all_sensor_data
-from services.alert_service import check_and_send_tiltmeter_alerts, check_and_send_seismograph_alert, check_and_send_smg3_seismograph_alert
+from services.alert_service import (
+    check_and_send_seismograph_alert,
+    check_and_send_smg3_seismograph_alert,
+    check_and_send_seismograph_instrument_13453_alert,
+)
 from services.rock_seismograph_service import check_and_send_rock_seismograph_alert
 # Note: check_and_send_rock_seismograph_alert_test is only for local testing via test.py
 from services.micromate_service import check_and_send_micromate_alert, check_and_send_instantel2_alert
+from services.duration_alert_service import check_and_send_all_duration_alerts
 from config import Config
 
 def run_scheduler():
@@ -22,10 +27,13 @@ def setup_scheduled_tasks():
     # To re-enable, uncomment the line below:
     # schedule.every().minute.do(fetch_and_store_all_sensor_data)
     
+    # Per-instrument Syscom seismograph jobs (each has its own thresholds / email lists / timing)
     schedule.every().minute.do(check_and_send_seismograph_alert)
     schedule.every().minute.do(check_and_send_smg3_seismograph_alert)
+    schedule.every().minute.do(check_and_send_seismograph_instrument_13453_alert)
     schedule.every().minute.do(check_and_send_micromate_alert)
     schedule.every().minute.do(check_and_send_instantel2_alert)
+    schedule.every().minute.do(check_and_send_all_duration_alerts)
     
     # Tiltmeter alerts are now triggered automatically when new data is inserted
     # No need for scheduled tiltmeter checks

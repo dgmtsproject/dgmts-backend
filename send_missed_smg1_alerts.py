@@ -93,15 +93,13 @@ def send_missed_smg1_alerts(instrument_id='SMG-1', days_back=3, custom_emails=No
         # Calculate time range
         est = pytz.timezone('US/Eastern')
         now_est = datetime.now(est)
-        # Account for instrument clock being 1 hour behind EST
-        now_instrument_time = now_est - timedelta(hours=1)
-        start_date = now_instrument_time - timedelta(days=days_back)
-        
-        # Format dates for API (using instrument time which is 1 hour behind EST)
+        # Syscom returns tz-aware timestamps in real US/Eastern, so query up to "now".
+        start_date = now_est - timedelta(days=days_back)
+
         start_time = start_date.strftime('%Y-%m-%dT%H:%M:%S')
-        end_time = now_instrument_time.strftime('%Y-%m-%dT%H:%M:%S')
-        
-        print(f"📅 Checking data from {start_time} to {end_time} EST (instrument time)")
+        end_time = now_est.strftime('%Y-%m-%dT%H:%M:%S')
+
+        print(f"📅 Checking data from {start_time} to {end_time} EST")
         
         # Fetch historical data from Syscom API
         api_key = os.environ.get('SYSCOM_API_KEY')
@@ -275,10 +273,10 @@ def send_missed_smg1_alerts(instrument_id='SMG-1', days_back=3, custom_emails=No
             )
             
             # Create subject with specific alert type and hour
+            # Use helper to handle Syscom's fixed UTC-5 instrument clock
             try:
-                dt_utc = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                dt_est = dt_utc.astimezone(est)
-                formatted_time = dt_est.strftime('%Y-%m-%d %I:%M %p EST')
+                from services.alert_service import _format_syscom_timestamp_to_est
+                formatted_time = _format_syscom_timestamp_to_est(timestamp, fmt='%m-%d-%Y %I:%M %p EST')
             except:
                 formatted_time = hour_key.replace('-', ' ')
             

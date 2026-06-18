@@ -9,9 +9,12 @@ from routes.sensor_routes import sensor_bp
 from routes.email_routes import email_bp
 from routes.micromate_routes import micromate_bp
 from routes.payment_routes import payment_bp
+from routes.dgmts_static_routes import dgmts_static_bp
 
 # Create Flask app instance
 app = Flask(__name__)
+
+# comment added by zainabfatima
 
 # Configure app
 app.config.from_object(Config)
@@ -28,6 +31,7 @@ app.register_blueprint(sensor_bp)
 app.register_blueprint(email_bp)
 app.register_blueprint(micromate_bp)
 app.register_blueprint(payment_bp)
+app.register_blueprint(dgmts_static_bp)
 
 # Root route
 @app.route('/')

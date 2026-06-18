@@ -115,7 +115,7 @@ def check_and_send_connection_lost_alerts():
         current_time = datetime.now(timezone.utc)
         est = pytz.timezone('US/Eastern')
         current_time_est = current_time.astimezone(est)
-        formatted_time = current_time_est.strftime('%Y-%m-%d %I:%M %p EST')
+        formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
         subject = f"DGMTS Internal Company Connection Retrieval Error - {formatted_time}"
         
         # Send email
@@ -182,7 +182,7 @@ def _create_connection_lost_email_body(connection_errors):
             dt_utc = datetime.fromisoformat(error['log_time'].replace('Z', '+00:00'))
             est = pytz.timezone('US/Eastern')
             dt_est = dt_utc.astimezone(est)
-            formatted_time = dt_est.strftime('%Y-%m-%d %I:%M:%S %p EST')
+            formatted_time = dt_est.strftime('%m-%d-%Y %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse timestamp: {error['log_time']}, error: {e}")
             formatted_time = error['log_time']
