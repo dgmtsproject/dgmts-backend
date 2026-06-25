@@ -469,6 +469,7 @@ def check_and_send_tiltmeter_alerts():
             # Get project information and instrument details for tiltmeters from database
             project_name = "ANC DAR-BC"  # Default fallback
             instrument_details = []
+            node_display_ids = {}  # node_id -> user-facing instrument ID (instrument_id_second)
             
             try:
                 # Get instrument details for all tiltmeter instruments
@@ -478,13 +479,14 @@ def check_and_send_tiltmeter_alerts():
                         instrument_info = get_project_info(instrument_id)
                         if instrument_info:
                             instrument_details.append(instrument_info)
+                            node_display_ids[node_id] = instrument_info['instrument_id']
                             if not project_name or project_name == "ANC DAR-BC":
                                 project_name = instrument_info['project_name']
             except Exception as e:
                 print(f"Error getting project info for tiltmeters: {e}")
             
             # Create email body with professional styling
-            body = _create_tiltmeter_email_body(node_alerts, node_ids, project_name, instrument_details)
+            body = _create_tiltmeter_email_body(node_alerts, node_ids, project_name, instrument_details, node_display_ids)
             
             current_time = datetime.now(timezone.utc)
             est = pytz.timezone('US/Eastern')
@@ -517,8 +519,9 @@ def check_and_send_tiltmeter_alerts():
     except Exception as e:
         print(f"Error in check_and_send_tiltmeter_alerts: {e}")
 
-def _create_tiltmeter_email_body(node_alerts, node_ids, project_name, instrument_details):
+def _create_tiltmeter_email_body(node_alerts, node_ids, project_name, instrument_details, node_display_ids=None):
     """Create HTML email body for tiltmeter alerts"""
+    node_display_ids = node_display_ids or {}
     body = f"""
     <html>
     <head>
@@ -604,9 +607,10 @@ def _create_tiltmeter_email_body(node_alerts, node_ids, project_name, instrument
     # Add alerts for each node
     for node_id in node_ids:
         if node_id in node_alerts:
+            display_id = node_display_ids.get(node_id) or Config.NODE_TO_INSTRUMENT_ID.get(node_id, node_id)
             body += f"""
                 <div class="alert-section">
-                    <h3>📊 Node {node_id} - Tiltmeter Alerts</h3>
+                    <h3>📊 {display_id} - Tiltmeter Alerts</h3>
             """
             
             for alert in node_alerts[node_id]:
