@@ -4,11 +4,12 @@ from flask import Blueprint, jsonify, current_app, request
 
 access_software_bp = Blueprint('access_software', __name__, url_prefix='/api/access-software')
 
-# Tables exported from iCCard3000.mdb by the RDP-side script, mapped to the
+# Datasets exported from iCCard3000.mdb by the RDP-side script, mapped to the
 # JSON filename uploaded via SFTP and the key used in the API response.
+# swipe_records.json is the enriched (joined) swipe log: each row carries the
+# person name, department, reader and direction rather than raw codes.
 EXPORTED_TABLES = {
-    'SwipeRecords': 't_d_SwipeRecord.json',
-    'Attendance': 't_a_Attendence.json',
+    'SwipeRecords': 'swipe_records.json',
 }
 
 
@@ -45,12 +46,12 @@ def get_access_software_routes():
 
     Reads the JSON files uploaded by the RDP-side export script from
     ACCESS_SOFTWARE_FILES_PATH and returns:
-      - SwipeRecords: rows from t_d_SwipeRecord (door swipe events)
-      - Attendance:   rows from t_a_Attendence (attendance parameters)
+      - SwipeRecords: enriched door swipe events (name, department, reader,
+        direction, timestamp) joined from t_d_SwipeRecord + t_b_Consumer +
+        t_b_Group + t_b_Reader.
 
     Optional query parameters:
-      - table: limit the response to one logical table
-               (e.g. ?table=SwipeRecords or ?table=Attendance)
+      - table: limit the response to one logical dataset (e.g. ?table=SwipeRecords)
     """
     try:
         files_path = current_app.config.get('ACCESS_SOFTWARE_FILES_PATH', 'access-software-files')
