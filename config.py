@@ -92,3 +92,7 @@ class Config:
     
     # FTP Server Files Configuration
     FTP_SERVER_FILES_PATH = os.getenv('FTP_SERVER_FILES_PATH', 'ftp-server-files')
+
+    # Access-control software (iCCard3000.mdb) exported JSON files.
+    # The RDP-side script uploads t_d_SwipeRecord.json and t_a_Attendence.json here via SFTP.
+    ACCESS_SOFTWARE_FILES_PATH = os.getenv('ACCESS_SOFTWARE_FILES_PATH', 'access-software-files')
