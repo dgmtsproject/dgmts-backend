@@ -102,7 +102,7 @@ def get_project_info(instrument_id):
         print(f"Error fetching project info for {instrument_id}: {e}")
         return None
 
-def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, force_resend=False):
+def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, force_resend=False):
     """Check Instantel Micromate alerts and send emails if thresholds are exceeded
     
     This function checks ALL readings from the last 6 hours by default. This ensures
@@ -133,7 +133,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
         'readings_already_sent': 0,
         'emails_sent': 0,
         'alert_timestamps': [],
-        'skipped_timestamps': []
+        'skipped_timestamps': [],
+        'inactivity_alert_sent': False
     }
     try:
         if not is_instrument_active('Instantel 1'):
@@ -173,107 +174,125 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
             shutdown_emails = custom_emails
             print(f"Using custom emails for test: {custom_emails}")
 
-        # 2. Note: We'll filter readings based on their own timestamps, not system time
-        # Get all readings first, then filter based on the most recent reading's timestamp
-        time_window_desc = f"{time_window_minutes / 1440:.1f} days" if time_window_minutes >= 1440 else f"{time_window_minutes / 60:.1f} hours" if time_window_minutes >= 60 else f"{time_window_minutes} minutes"
-        print(f"Will check readings from last {time_window_desc} based on reading timestamps")
+        # 2. Calculate time range for checking alerts (UM15783 CSV pipeline, mirrors Instantel 2)
+        utc_now = datetime.now(timezone.utc)
+        est_tz = pytz.timezone('US/Eastern')
+        now_est = utc_now.astimezone(est_tz)
+        start_time = now_est - timedelta(minutes=time_window_minutes)
 
-        # 3. Fetch data from Micromate API
-        url = "https://imsite.dullesgeotechnical.com/api/micromate/readings"
+        time_window_desc = f"{time_window_minutes / 1440:.1f} days" if time_window_minutes >= 1440 else f"{time_window_minutes / 60:.1f} hours" if time_window_minutes >= 60 else f"{time_window_minutes} minutes"
+        print(f"Checking Instantel 1 (UM15783) data from {start_time.strftime('%Y-%m-%dT%H:%M:%S')} to {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST (last {time_window_desc})")
+
+        # 3. Fetch data from UM15783 CSV API with date filtering
+        from_date = start_time.strftime('%Y-%m-%d %H:%M:%S')
+        to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
+
+        url = f"https://imsite.dullesgeotechnical.com/api/micromate/UM15783/readings?fromdatetime={from_date}&todatetime={to_date}"
         response = requests.get(url)
         if response.status_code != 200:
-            print(f"Failed to fetch Micromate data: {response.status_code} {response.text}")
-            log_alert_event("ERROR", f"Failed to fetch Micromate data: {response.status_code} {response.text}", 'Instantel 1')
-            result_summary['error'] = f"Failed to fetch Micromate data: {response.status_code}"
+            print(f"Failed to fetch UM15783 data: {response.status_code} {response.text}")
+            log_alert_event("ERROR", f"Failed to fetch UM15783 data: {response.status_code} {response.text}", 'Instantel 1')
+            result_summary['error'] = f"Failed to fetch UM15783 data: {response.status_code}"
             return result_summary
 
         data = response.json()
-        micromate_readings = data.get('MicromateReadings', [])
-        
-        if not micromate_readings:
-            print("No Micromate data received")
-            log_alert_event("ERROR", "No Micromate data received", 'Instantel 1')
-            result_summary['error'] = "No Micromate data received"
+        um15783_readings = data.get('UM15783Readings', [])
+
+        if not um15783_readings:
+            print("No UM15783 data received")
+            log_alert_event("ERROR", "No UM15783 data received", 'Instantel 1')
+            result_summary['error'] = "No UM15783 data received"
             return result_summary
 
-        print(f"Received {len(micromate_readings)} Micromate data points")
-
-        # 4. Filter readings based on their own timestamps (not system time)
-        # Get the most recent reading's timestamp and filter all readings within time_window_minutes of it
         alerts_by_timestamp = {}
-        
-        if not micromate_readings:
-            print("No Micromate readings available")
-            log_alert_event("ERROR", "No Micromate readings available", 'Instantel 1')
-            result_summary['error'] = "No Micromate readings available"
+
+        # Recipients (mirror Instantel 2: always copy the project inbox)
+        all_recipients = set(alert_emails + warning_emails + shutdown_emails)
+        all_recipients.add('dgmts.project@gmail.com')
+
+        # --------------------------------------------------
+        # 4. NO DATA INACTIVITY CHECK (1 HOUR)
+        # --------------------------------------------------
+        latest_time_str = um15783_readings[-1]['Time']
+        dt_naive = datetime.strptime(latest_time_str, '%Y-%m-%d %H:%M:%S')
+        dt_est = est_tz.localize(dt_naive)
+        dt_utc = dt_est.astimezone(timezone.utc)
+
+        minutes_since_last = (utc_now - dt_utc).total_seconds() / 60
+
+        if minutes_since_last >= 60:
+            already_sent = supabase.table('sent_alerts') \
+                .select('id') \
+                .eq('instrument_id', 'Instantel 1') \
+                .eq('alert_type', 'NO_DATA_1_HOUR') \
+                .execute()
+
+            if not already_sent.data:
+                subject = '⚠️ Instantel 1 – No Data Received for 1 Hour'
+                body = f'''
+                <p>No UM15783 data has been received for <b>Instantel 1</b>.</p>
+                <p>Last data timestamp:
+                <b>{dt_est.strftime('%m-%d-%Y %I:%M %p EST')}</b></p>
+                <p>Please check instrument power, connectivity, or API status.</p>
+                '''
+
+                email_sent = send_email(','.join(all_recipients), subject, body)
+                if email_sent:
+                    supabase.table('sent_alerts').insert({
+                        'instrument_id': 'Instantel 1',
+                        'node_id': 24252,
+                        'timestamp': latest_time_str,
+                        'alert_type': 'NO_DATA_1_HOUR'
+                    }).execute()
+                    log_alert_event('EMAIL_SENT', 'No data inactivity alert sent', 'Instantel 1')
+                    result_summary['inactivity_alert_sent'] = True
+
             return result_summary
-        
-        # Sort all readings by Time to find the most recent
-        try:
-            sorted_all_readings = sorted(micromate_readings, key=lambda x: x.get('Time', ''), reverse=True)
-            most_recent_reading = sorted_all_readings[0]
-            most_recent_timestamp = most_recent_reading.get('Time', '')
-            
-            if not most_recent_timestamp:
-                print("No valid timestamp in most recent reading")
-                log_alert_event("ERROR", "No valid timestamp in most recent reading", 'Instantel 1')
-                result_summary['error'] = "No valid timestamp in most recent reading"
-                return result_summary
-            
-            # Parse the most recent reading's timestamp
-            from datetime import datetime, timedelta
-            most_recent_dt = datetime.fromisoformat(most_recent_timestamp.replace('Z', '+00:00'))
-            
-            # Calculate the cutoff time: time_window_minutes before the most recent reading
-            cutoff_time = most_recent_dt - timedelta(minutes=time_window_minutes)
-            
-            print(f"Most recent reading timestamp: {most_recent_timestamp}")
-            print(f"Filtering readings from {cutoff_time.strftime('%Y-%m-%dT%H:%M:%S')} to {most_recent_timestamp}")
-            
-        except Exception as e:
-            print(f"Failed to process reading timestamps: {e}")
-            log_alert_event("ERROR", f"Failed to process reading timestamps: {e}", 'Instantel 1')
-            result_summary['error'] = f"Failed to process reading timestamps: {e}"
-            return result_summary
-        
-        # Filter readings within the time window (based on reading timestamps, not system time)
+
+        # Clear inactivity alert if data resumed
+        supabase.table('sent_alerts') \
+            .delete() \
+            .eq('instrument_id', 'Instantel 1') \
+            .eq('alert_type', 'NO_DATA_1_HOUR') \
+            .execute()
+
+        print(f"Received {len(um15783_readings)} UM15783 data points")
+
+        # 5. Filter readings within the time window (EST)
+        start_utc = start_time.astimezone(timezone.utc)
+        now_utc = now_est.astimezone(timezone.utc)
+
         readings_in_window = []
-        for reading in micromate_readings:
+        for reading in um15783_readings:
             try:
-                timestamp_str = reading.get('Time', '')
-                if not timestamp_str:
-                    continue
-                
-                # Parse timestamp (format: "2025-11-18T22:00:06.055+00:00")
-                reading_dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                
-                # Check if reading is within the time window (between cutoff_time and most_recent_dt)
-                if cutoff_time <= reading_dt <= most_recent_dt:
+                timestamp_str = reading['Time']
+                dt_naive = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                dt_est = est_tz.localize(dt_naive)
+                dt_utc = dt_est.astimezone(timezone.utc)
+                if start_utc <= dt_utc <= now_utc:
                     readings_in_window.append(reading)
             except Exception as e:
-                print(f"Failed to parse timestamp for reading: {e}")
+                print(f"Failed to parse timestamp: {e}")
                 continue
-        
+
         if not readings_in_window:
-            print(f"No Micromate readings found in time window (last {time_window_minutes} minutes from most recent reading)")
-            log_alert_event("INFO", f"No Micromate readings found in time window (last {time_window_minutes} minutes from most recent reading)", 'Instantel 1')
+            print(f"No UM15783 readings found in time window ({start_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_est.strftime('%Y-%m-%d %H:%M:%S')} EST)")
+            log_alert_event("INFO", f"No UM15783 readings found in time window ({start_time.strftime('%Y-%m-%d %H:%M:%S')} to {now_est.strftime('%Y-%m-%d %H:%M:%S')} EST)", 'Instantel 1')
             return result_summary
-        
-        print(f"Found {len(readings_in_window)} readings in time window (last {time_window_minutes} minutes from most recent reading)")
-        
+
+        print(f"Found {len(readings_in_window)} readings in time window")
+
         # Sort readings by Time (oldest first) to process them chronologically
         sorted_readings = sorted(readings_in_window, key=lambda x: x.get('Time', ''))
-        
-        # Processing readings from time window
         
         # Check thresholds for each reading in the time window
         result_summary['total_readings_checked'] = len(sorted_readings)
         
         for reading in sorted_readings:
             timestamp_str = reading['Time']
-            longitudinal = abs(float(reading.get('Longitudinal', 0)))
-            transverse = abs(float(reading.get('Transverse', 0)))
-            vertical = abs(float(reading.get('Vertical', 0)))
+            longitudinal = abs(float(reading.get('Longitudinal_PPV', 0)))
+            transverse = abs(float(reading.get('Transverse_PPV', 0)))
+            vertical = abs(float(reading.get('Vertical_PPV', 0)))
             
             # Check if we've already sent for this timestamp (unless force_resend is True)
             if not force_resend:
@@ -376,9 +395,10 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=360, 
                 """
                 log_alert_event("ERROR", f"Error creating email body: {e}", 'Instantel 1')
             
-            # Use the timestamp from the reading for the subject (no timezone conversion)
-            formatted_time = timestamp_str
-            subject = f"📊 Micromate Alert Notification - {formatted_time}"
+            # Subject uses current EST time (mirrors Instantel 2)
+            current_time_est = datetime.now(timezone.utc).astimezone(est_tz)
+            formatted_time = current_time_est.strftime('%m-%d-%Y %I:%M %p EST')
+            subject = f"📊 Instantel 1 (UM15783) Alert Notification - {formatted_time}"
             
             all_emails = set(alert_emails + warning_emails + shutdown_emails)
             print(f"Recipients: {all_emails}")
@@ -948,7 +968,7 @@ def _create_instantel2_email_body(alerts_by_timestamp, project_name, instrument_
 
 def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_details):
     """Create HTML email body for Micromate alerts"""
-    display_id = instrument_details[0]['instrument_id'] if instrument_details else 'Instantel 1'
+    display_id = instrument_details[0]['instrument_id'] if instrument_details else 'Instantel 1 (UM15783)'
     body = f"""
     <html>
     <head>
@@ -986,7 +1006,7 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
     <body>
         <div class="container">
             <div class="header">
-                <h1>📊 INSTANTEL MICROMATE ALERT NOTIFICATION</h1>
+                <h1>📊 INSTANTEL 1 (UM15783) ALERT NOTIFICATION</h1>
                 <p>Dulles Geotechnical Monitoring System - {project_name}</p>
             </div>
             
@@ -1027,17 +1047,17 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
                 
                 <p style="font-size: 16px; color: #495057; margin-bottom: 25px;">
                     This is an automated alert notification from the DGMTS monitoring system. 
-                    The following Instantel Micromate thresholds have been exceeded in real-time:
+                    The following Instantel 1 (UM15783) thresholds have been exceeded in real-time:
                 </p>
     """
     
     # Add alerts for each timestamp
     for timestamp, alert_data in alerts_by_timestamp.items():
-        # Format timestamp to EST
+        # Format timestamp to EST (CSV timestamps are naive "YYYY-MM-DD HH:MM:SS" in EST)
         try:
-            dt_utc = datetime.fromisoformat(alert_data['timestamp'].replace('Z', '+00:00'))
-            est = pytz.timezone('US/Eastern')
-            dt_est = dt_utc.astimezone(est)
+            dt_naive = datetime.strptime(alert_data['timestamp'], '%Y-%m-%d %H:%M:%S')
+            est_tz = pytz.timezone('US/Eastern')
+            dt_est = est_tz.localize(dt_naive)
             formatted_time = dt_est.strftime('%m-%d-%Y %I:%M:%S %p EST')
         except Exception as e:
             print(f"Failed to parse/convert timestamp: {alert_data['timestamp']}, error: {e}")
@@ -1045,7 +1065,7 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
         
         body += f"""
                 <div class="alert-section">
-                    <h3>📊 Real-time Alert - Instantel Micromate</h3>
+                    <h3>📊 Real-time Alert - Instantel 1 (UM15783)</h3>
         """
         
         for message in alert_data['messages']:
@@ -1100,7 +1120,7 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
                 <div style="background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 15px; margin-top: 20px;">
                     <p style="margin: 0; color: #0056d2; font-weight: bold;">⚠️ Action Required:</p>
                     <p style="margin: 5px 0 0 0; color: #495057;">
-                        Please review the Instantel Micromate data and take appropriate action if necessary. 
+                        Please review the Instantel 1 (UM15783) data and take appropriate action if necessary. 
                         Values shown are the actual readings that exceeded thresholds.
                         <br><br>
                         <strong>Project ID:</strong> 24252<br>
@@ -1122,9 +1142,9 @@ def _create_micromate_email_body(alerts_by_timestamp, project_name, instrument_d
     
     return body
 
-def get_um16368_readings(from_datetime=None, to_datetime=None):
+def get_instantel_csv_readings(device_folder, from_datetime=None, to_datetime=None):
     """
-    Parse CSV files from /root/root/ftp-server/Dulles Test/UM16368/CSV directory
+    Parse CSV files from /root/root/ftp-server/Dulles Test/<device_folder>/CSV directory
     and extract readings dynamically by finding the header structure:
     - Only processes files ending with IDFH.csv (excludes IDFW.csv files)
     - Search for "PPV" in any cell
@@ -1132,14 +1152,15 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
     - That row should have "TIME" in the first column - this is the header row
     - The row with PPV contains column names or format indicators
     - Rows below the header row contain the actual readings
-    
+
     Args:
+        device_folder (str): Instantel device folder name (e.g. 'UM16368', 'UM15783')
         from_datetime (str, optional): Start date/datetime to filter readings (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
         to_datetime (str, optional): End date/datetime to filter readings (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
-    
+
     Returns a list of readings with key-value pairs for each timestamp.
     """
-    csv_directory = "/root/root/ftp-server/Dulles Test/UM16368/CSV"
+    csv_directory = f"/root/root/ftp-server/Dulles Test/{device_folder}/CSV"
     
     if not os.path.exists(csv_directory):
         # CSV directory not found
@@ -1672,4 +1693,14 @@ def get_um16368_readings(from_datetime=None, to_datetime=None):
         'errors': errors if errors else [],
         'total_before_filter': total_before_filter
     }
+
+
+def get_um16368_readings(from_datetime=None, to_datetime=None):
+    """Instantel 2 CSV readings (device folder UM16368)."""
+    return get_instantel_csv_readings('UM16368', from_datetime=from_datetime, to_datetime=to_datetime)
+
+
+def get_um15783_readings(from_datetime=None, to_datetime=None):
+    """Instantel 1 CSV readings (device folder UM15783)."""
+    return get_instantel_csv_readings('UM15783', from_datetime=from_datetime, to_datetime=to_datetime)
 

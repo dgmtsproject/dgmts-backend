@@ -4,7 +4,7 @@ import glob
 import re
 from flask import Blueprint, jsonify, current_app, request
 from config import Config
-from services.micromate_service import check_and_send_micromate_alert, check_and_send_instantel2_alert, get_um16368_readings
+from services.micromate_service import check_and_send_micromate_alert, check_and_send_instantel2_alert, get_um16368_readings, get_um15783_readings
 
 micromate_bp = Blueprint('micromate', __name__, url_prefix='/api/micromate')
 
@@ -449,8 +449,9 @@ def _test_last_reading_internal(test_timestamp=None):
         from supabase import create_client
         from config import Config
         import requests
-        from datetime import datetime
-        
+        from datetime import datetime, timedelta
+        import pytz
+
         supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
         
         # 1. Get instrument settings
@@ -466,41 +467,52 @@ def _test_last_reading_internal(test_timestamp=None):
         warning_value = instrument.get('warning_value')
         shutdown_value = instrument.get('shutdown_value')
         
-        # 2. Fetch data from Micromate API
-        url = "https://imsite.dullesgeotechnical.com/api/micromate/readings"
+        # 2. Fetch data from UM15783 CSV API (last 7 days)
+        est_tz = pytz.timezone('US/Eastern')
+        now_est = datetime.now(est_tz)
+        start_est = now_est - timedelta(days=7)
+        from_date = start_est.strftime('%Y-%m-%d %H:%M:%S')
+        to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
+        url = f"https://imsite.dullesgeotechnical.com/api/micromate/UM15783/readings?fromdatetime={from_date}&todatetime={to_date}"
         response = requests.get(url)
         if response.status_code != 200:
             return jsonify({
-                'error': f'Failed to fetch Micromate data: {response.status_code}',
+                'error': f'Failed to fetch UM15783 data: {response.status_code}',
                 'status': 'error'
             }), 500
         
         data = response.json()
-        micromate_readings = data.get('MicromateReadings', [])
+        um15783_readings = data.get('UM15783Readings', [])
         
-        if not micromate_readings:
+        if not um15783_readings:
             return jsonify({
-                'error': 'No Micromate data received',
+                'error': 'No UM15783 data received',
                 'status': 'error'
             }), 404
+
+        def _parse_reading_time(time_str):
+            if not time_str:
+                return None
+            try:
+                return est_tz.localize(datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S'))
+            except ValueError:
+                try:
+                    return datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                except ValueError:
+                    return None
         
         # 3. Get the last reading (with respect to test_timestamp if provided)
         if test_timestamp:
-            # Find the latest reading that is <= test_timestamp
             print(f"Testing with provided timestamp: {test_timestamp}")
             try:
                 test_dt = datetime.fromisoformat(test_timestamp.replace('Z', '+00:00'))
-                # Filter readings <= test_timestamp and sort by Time
+                if test_dt.tzinfo is None:
+                    test_dt = est_tz.localize(test_dt)
                 filtered_readings = []
-                for reading in micromate_readings:
-                    try:
-                        reading_time = reading.get('Time', '')
-                        if reading_time:
-                            reading_dt = datetime.fromisoformat(reading_time.replace('Z', '+00:00'))
-                            if reading_dt <= test_dt:
-                                filtered_readings.append(reading)
-                    except:
-                        continue
+                for reading in um15783_readings:
+                    reading_dt = _parse_reading_time(reading.get('Time', ''))
+                    if reading_dt and reading_dt <= test_dt:
+                        filtered_readings.append(reading)
                 
                 if not filtered_readings:
                     return jsonify({
@@ -516,17 +528,16 @@ def _test_last_reading_internal(test_timestamp=None):
                 return jsonify({
                     'error': f'Invalid timestamp format: {test_timestamp}. Error: {str(e)}',
                     'status': 'error',
-                    'expected_format': '2025-11-18T13:50:06.053+00:00'
+                    'expected_format': '2026-07-04 13:50:06 or ISO-8601'
                 }), 400
         else:
-            # Get the actual latest reading
-            sorted_readings = sorted(micromate_readings, key=lambda x: x.get('Time', ''), reverse=True)
+            sorted_readings = sorted(um15783_readings, key=lambda x: x.get('Time', ''), reverse=True)
             last_reading = sorted_readings[0]
         
         timestamp_str = last_reading.get('Time', 'N/A')
-        longitudinal = abs(float(last_reading.get('Longitudinal', 0)))
-        transverse = abs(float(last_reading.get('Transverse', 0)))
-        vertical = abs(float(last_reading.get('Vertical', 0)))
+        longitudinal = abs(float(last_reading.get('Longitudinal_PPV', 0)))
+        transverse = abs(float(last_reading.get('Transverse_PPV', 0)))
+        vertical = abs(float(last_reading.get('Vertical_PPV', 0)))
         
         # 4. Check if alert was already sent
         already_sent = supabase.table('sent_alerts') \
@@ -596,7 +607,7 @@ def _test_last_reading_internal(test_timestamp=None):
             'alert_already_sent': alert_already_sent,
             'sent_alert_record': sent_alert_record,
             'scheduler_action': action,
-            'total_readings_available': len(micromate_readings)
+            'total_readings_available': len(um15783_readings)
         }), 200
         
     except Exception as e:
@@ -657,6 +668,53 @@ def get_um16368_readings_endpoint():
         
         return jsonify(response_data), 200
         
+    except Exception as e:
+        return jsonify({
+            'error': f'Internal server error: {str(e)}',
+            'message': 'An unexpected error occurred while processing the request'
+        }), 500
+
+@micromate_bp.route('/UM15783/readings', methods=['GET'])
+def get_um15783_readings_endpoint():
+    """
+    Get all readings from CSV files in /root/root/ftp-server/Dulles Test/UM15783/CSV directory (Instantel 1).
+    Same dynamic CSV header detection as the UM16368 endpoint.
+
+    Query Parameters:
+    - fromdatetime: Optional start date/datetime to filter readings (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
+    - todatetime: Optional end date/datetime to filter readings (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
+
+    Example: /api/micromate/UM15783/readings?fromdatetime=2026-07-04&todatetime=2026-07-05
+    """
+    try:
+        from_datetime = request.args.get('fromdatetime')
+        to_datetime = request.args.get('todatetime')
+
+        result = get_um15783_readings(from_datetime=from_datetime, to_datetime=to_datetime)
+
+        if not result:
+            return jsonify({
+                'error': 'Failed to retrieve UM15783 readings',
+                'message': 'No data could be retrieved from CSV files'
+            }), 500
+
+        response_data = {
+            'UM15783Readings': result.get('readings', []),
+            'summary': result.get('summary', {}),
+            'processed_files': result.get('processed_files', []),
+            'errors': result.get('errors', [])
+        }
+
+        if from_datetime or to_datetime:
+            response_data['filters'] = {
+                'fromdatetime': from_datetime,
+                'todatetime': to_datetime,
+                'total_before_filter': result.get('total_before_filter', 0),
+                'total_after_filter': len(result.get('readings', []))
+            }
+
+        return jsonify(response_data), 200
+
     except Exception as e:
         return jsonify({
             'error': f'Internal server error: {str(e)}',
