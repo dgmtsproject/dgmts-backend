@@ -8,6 +8,7 @@ from supabase import create_client, Client
 from config import Config
 from .email_service import send_email
 from .instrument_utils import is_instrument_active, get_display_instrument_id
+from .instrument_route_service import find_micromate_instrument
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
@@ -137,18 +138,18 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
         'inactivity_alert_sent': False
     }
     try:
-        if not is_instrument_active('Instantel 1'):
-            print("Instantel 1 is inactive; skipping Micromate alert check.")
+        instrument = find_micromate_instrument('UM15783')
+        instrument_key = instrument.get('instrument_id') if instrument else 'Instantel 1'
+        if not is_instrument_active(instrument_key):
+            print(f"{instrument_key} is inactive; skipping Micromate alert check.")
             result_summary['skipped'] = 'Instrument inactive'
             return result_summary
 
         # 1. Get instrument settings
-        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'Instantel 1').execute()
-        instrument = instrument_resp.data[0] if instrument_resp.data else None
         if not instrument:
-            print("No instrument found for Instantel 1")
-            log_alert_event("ERROR", f"In check_and_send_micromate_alert: No instrument found for Instantel 1", 'Instantel 1')
-            result_summary['error'] = "No instrument found for Instantel 1"
+            print("No instrument found for UM15783")
+            log_alert_event("ERROR", "In check_and_send_micromate_alert: No instrument found for UM15783", instrument_key)
+            result_summary['error'] = "No instrument found for UM15783"
             return result_summary
 
         # For micromate, use single values for each axis
@@ -497,19 +498,18 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
     }
 
     try:
-        if not is_instrument_active('Instantel 2'):
-            print("Instantel 2 is inactive; skipping UM16368 alert check.")
+        instrument = find_micromate_instrument('UM16368')
+        instrument_key = instrument.get('instrument_id') if instrument else 'Instantel 2'
+        if not is_instrument_active(instrument_key):
+            print(f"{instrument_key} is inactive; skipping UM16368 alert check.")
             result_summary['skipped'] = 'Instrument inactive'
             return result_summary
 
         # 1. Get instrument settings
-        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'Instantel 2').execute()
-        instrument = instrument_resp.data[0] if instrument_resp.data else None
-
         if not instrument:
-            print("No instrument found for Instantel 2")
-            log_alert_event("ERROR", f"In check_and_send_instantel2_alert: No instrument found for Instantel 2", 'Instantel 2')
-            result_summary['error'] = "No instrument found for Instantel 2"
+            print("No instrument found for UM16368")
+            log_alert_event("ERROR", "In check_and_send_instantel2_alert: No instrument found for UM16368", instrument_key)
+            result_summary['error'] = "No instrument found for UM16368"
             return result_summary
 
         # For Instantel 2, use single values for each axis
