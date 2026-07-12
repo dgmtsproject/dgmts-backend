@@ -38,15 +38,11 @@ def setup_scheduled_tasks():
     # Tiltmeter alerts are now triggered automatically when new data is inserted
     # No need for scheduled tiltmeter checks
     
-    # ROCKSMG ALERTS DISABLED - Scheduler is turned off as requested
-    # The following code is commented out to disable Rock Seismograph alerts
-    # To re-enable, uncomment the lines below:
-    # 
-    # for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():
-    #     schedule.every().minute.do(check_and_send_rock_seismograph_alert, instrument_id)
-    
+    # Rock Seismograph alerts (Yellow Line ANC)
+    for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():
+        schedule.every().minute.do(check_and_send_rock_seismograph_alert, instrument_id)
+
     print("⚠️  TILTMETER DATA FETCHING DISABLED - No data for nodes")
-    print("⚠️  ROCKSMG ALERTS DISABLED - Scheduler is turned off")
     
     # NOTE: Test scheduler (check_and_send_rock_seismograph_alert_test) is NOT scheduled in production
     # It should only be run manually via test.py for local testing

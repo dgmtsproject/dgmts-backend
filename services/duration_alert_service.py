@@ -17,6 +17,7 @@ from config import Config
 from services.alert_service import get_project_info, log_alert_event, _legacy_syscom_device_id
 from services.email_service import send_email
 from services.instrument_utils import get_display_instrument_id
+from services.instrument_route_service import resolve_micromate_device_folder
 
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
@@ -267,61 +268,49 @@ def _fetch_tiltmeter_readings(instrument_id, window_hours=24):
     return readings, node_id
 
 
+def _fetch_instantel_readings_by_folder(device_folder, window_minutes=720):
+    node_id = 24252
+    est_tz = pytz.timezone('US/Eastern')
+    now_est = datetime.now(timezone.utc).astimezone(est_tz)
+    start_est = now_est - timedelta(minutes=window_minutes)
+    from_date = start_est.strftime('%Y-%m-%d %H:%M:%S')
+    to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
+    response_key = f'{device_folder}Readings'
+    url = (
+        f'https://imsite.dullesgeotechnical.com/api/micromate/{device_folder}/readings'
+        f'?fromdatetime={from_date}&todatetime={to_date}'
+    )
+    response = requests.get(url, timeout=60)
+    if response.status_code != 200:
+        return [], node_id
+    raw = response.json().get(response_key, [])
+    readings = []
+    for row in raw:
+        readings.append({
+            'timestamp': row.get('Time'),
+            'x_value': abs(float(row.get('Longitudinal_PPV') or 0)),
+            'y_value': abs(float(row.get('Transverse_PPV') or 0)),
+            'z_value': abs(float(row.get('Vertical_PPV') or 0)),
+        })
+    return readings, node_id
+
+
 def _fetch_instantel_readings(instrument_id, window_minutes=720):
     node_id = INSTANTEL_NODE_IDS.get(instrument_id)
     if instrument_id == 'Instantel 1':
-        est_tz = pytz.timezone('US/Eastern')
-        now_est = datetime.now(timezone.utc).astimezone(est_tz)
-        start_est = now_est - timedelta(minutes=window_minutes)
-        from_date = start_est.strftime('%Y-%m-%d %H:%M:%S')
-        to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
-        url = (
-            'https://imsite.dullesgeotechnical.com/api/micromate/UM15783/readings'
-            f'?fromdatetime={from_date}&todatetime={to_date}'
-        )
-        response = requests.get(url, timeout=60)
-        if response.status_code != 200:
-            return [], node_id
-        raw = response.json().get('UM15783Readings', [])
-        readings = []
-        for row in raw:
-            readings.append({
-                'timestamp': row.get('Time'),
-                'x_value': abs(float(row.get('Longitudinal_PPV') or 0)),
-                'y_value': abs(float(row.get('Transverse_PPV') or 0)),
-                'z_value': abs(float(row.get('Vertical_PPV') or 0)),
-            })
-        return readings, node_id
+        return _fetch_instantel_readings_by_folder('UM15783', window_minutes)
 
     if instrument_id == 'Instantel 2':
-        est_tz = pytz.timezone('US/Eastern')
-        now_est = datetime.now(timezone.utc).astimezone(est_tz)
-        start_est = now_est - timedelta(minutes=window_minutes)
-        from_date = start_est.strftime('%Y-%m-%d %H:%M:%S')
-        to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
-        url = (
-            'https://imsite.dullesgeotechnical.com/api/micromate/UM16368/readings'
-            f'?fromdatetime={from_date}&todatetime={to_date}'
-        )
-        response = requests.get(url, timeout=60)
-        if response.status_code != 200:
-            return [], node_id
-        raw = response.json().get('UM16368Readings', [])
-        readings = []
-        for row in raw:
-            readings.append({
-                'timestamp': row.get('Time'),
-                'x_value': abs(float(row.get('Longitudinal_PPV') or 0)),
-                'y_value': abs(float(row.get('Transverse_PPV') or 0)),
-                'z_value': abs(float(row.get('Vertical_PPV') or 0)),
-            })
-        return readings, node_id
+        return _fetch_instantel_readings_by_folder('UM16368', window_minutes)
 
     return [], node_id
 
 
 def _fetch_readings_for_instrument(instrument):
     instrument_id = instrument.get('instrument_id', '')
+    micromate_folder = resolve_micromate_device_folder(instrument)
+    if micromate_folder:
+        return _fetch_instantel_readings_by_folder(micromate_folder)
     if _is_tiltmeter(instrument_id):
         return _fetch_tiltmeter_readings(instrument_id)
     if instrument_id in INSTANTEL_NODE_IDS:

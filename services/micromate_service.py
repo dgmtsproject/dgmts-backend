@@ -152,6 +152,9 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
             result_summary['error'] = "No instrument found for UM15783"
             return result_summary
 
+        alert_instrument_id = instrument['instrument_id']
+        alert_node_id = instrument.get('project_id') or 24252
+
         # For micromate, use single values for each axis
         alert_value = instrument.get('alert_value')
         warning_value = instrument.get('warning_value')
@@ -224,7 +227,7 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
         if minutes_since_last >= 60:
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
-                .eq('instrument_id', 'Instantel 1') \
+                .eq('instrument_id', alert_instrument_id) \
                 .eq('alert_type', 'NO_DATA_1_HOUR') \
                 .execute()
 
@@ -240,8 +243,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
                 email_sent = send_email(','.join(all_recipients), subject, body)
                 if email_sent:
                     supabase.table('sent_alerts').insert({
-                        'instrument_id': 'Instantel 1',
-                        'node_id': 24252,
+                        'instrument_id': alert_instrument_id,
+                        'node_id': alert_node_id,
                         'timestamp': latest_time_str,
                         'alert_type': 'NO_DATA_1_HOUR'
                     }).execute()
@@ -253,7 +256,7 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
         # Clear inactivity alert if data resumed
         supabase.table('sent_alerts') \
             .delete() \
-            .eq('instrument_id', 'Instantel 1') \
+            .eq('instrument_id', alert_instrument_id) \
             .eq('alert_type', 'NO_DATA_1_HOUR') \
             .execute()
 
@@ -300,8 +303,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
                 try:
                     already_sent = supabase.table('sent_alerts') \
                         .select('id, timestamp, alert_type, created_at') \
-                        .eq('instrument_id', 'Instantel 1') \
-                        .eq('node_id', 24252) \
+                        .eq('instrument_id', alert_instrument_id) \
+                        .eq('node_id', alert_node_id) \
                         .eq('timestamp', timestamp_str) \
                         .execute()
                     if already_sent.data:
@@ -358,7 +361,7 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
             instrument_details = []
             
             try:
-                instrument_info = get_project_info('Instantel 1')
+                instrument_info = get_project_info(alert_instrument_id)
                 if instrument_info:
                     instrument_details.append(instrument_info)
                     project_name = instrument_info['project_name']
@@ -421,8 +424,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
                                     alert_type = _determine_alert_type(alert_data['messages'])
                                     
                                     sent_alert_resp = supabase.table('sent_alerts').insert({
-                                        'instrument_id': 'Instantel 1',
-                                        'node_id': 24252,
+                                        'instrument_id': alert_instrument_id,
+                                        'node_id': alert_node_id,
                                         'timestamp': alert_data['timestamp'],
                                         'alert_type': alert_type
                                     }).execute()
@@ -512,6 +515,9 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
             result_summary['error'] = "No instrument found for UM16368"
             return result_summary
 
+        alert_instrument_id = instrument['instrument_id']
+        alert_node_id = instrument.get('project_id') or 24252
+
         # For Instantel 2, use single values for each axis
         alert_value = instrument.get('alert_value')
         warning_value = instrument.get('warning_value')
@@ -593,7 +599,7 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
         if minutes_since_last >= 60:
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
-                .eq('instrument_id', 'Instantel 2') \
+                .eq('instrument_id', alert_instrument_id) \
                 .eq('alert_type', 'NO_DATA_1_HOUR') \
                 .execute()
 
@@ -609,8 +615,8 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
                 email_sent = send_email(','.join(all_emails), subject, body)
                 if email_sent:
                     supabase.table('sent_alerts').insert({
-                        'instrument_id': 'Instantel 2',
-                        'node_id': 24252,
+                        'instrument_id': alert_instrument_id,
+                        'node_id': alert_node_id,
                         'timestamp': latest_time_str,
                         'alert_type': 'NO_DATA_1_HOUR'
                     }).execute()
@@ -623,7 +629,7 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
         # Clear inactivity alert if data resumed
         supabase.table('sent_alerts') \
             .delete() \
-            .eq('instrument_id', 'Instantel 2') \
+            .eq('instrument_id', alert_instrument_id) \
             .eq('alert_type', 'NO_DATA_1_HOUR') \
             .execute()
 
@@ -680,8 +686,8 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
             if not force_resend:
                 already_sent = supabase.table('sent_alerts') \
                     .select('id') \
-                    .eq('instrument_id', 'Instantel 2') \
-                    .eq('node_id', 24252) \
+                    .eq('instrument_id', alert_instrument_id) \
+                    .eq('node_id', alert_node_id) \
                     .eq('timestamp', timestamp_str) \
                     .execute()
 
@@ -730,7 +736,7 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
             instrument_details = []
             
             try:
-                instrument_info = get_project_info('Instantel 2')
+                instrument_info = get_project_info(alert_instrument_id)
                 if instrument_info:
                     instrument_details.append(instrument_info)
                     project_name = instrument_info['project_name']
@@ -763,8 +769,8 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
                             alert_type = _determine_alert_type(alert_data['messages'])
                             
                             sent_alert_resp = supabase.table('sent_alerts').insert({
-                                'instrument_id': 'Instantel 2',
-                                'node_id': 24252,  # Using same node_id as Instantel 1, adjust if needed
+                                'instrument_id': alert_instrument_id,
+                                'node_id': alert_node_id,  # Using same node_id as Instantel 1, adjust if needed
                                 'timestamp': alert_data['timestamp'],
                                 'alert_type': alert_type
                             }).execute()

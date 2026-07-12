@@ -13,6 +13,23 @@ def get_display_instrument_id(instrument) -> str:
     return str(instrument).strip()
 
 
+def find_instrument_by_id_candidates(candidate_ids):
+    """Return the first instruments row matching any of the given instrument_id values."""
+    for candidate_id in candidate_ids:
+        try:
+            resp = (
+                supabase.table('instruments')
+                .select('*')
+                .eq('instrument_id', candidate_id)
+                .execute()
+            )
+            if resp.data:
+                return resp.data[0]
+        except Exception as e:
+            print(f"Could not look up instrument {candidate_id}: {e}")
+    return None
+
+
 def is_instrument_active(instrument_id: str) -> bool:
     """Return False when instrument monitoring is turned off in the app."""
     try:

@@ -33,7 +33,7 @@ import pytz
 from supabase import create_client, Client
 from config import Config
 from .email_service import send_email
-from .instrument_utils import is_instrument_active, get_display_instrument_id
+from .instrument_utils import is_instrument_active, get_display_instrument_id, find_instrument_by_id_candidates
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
@@ -876,19 +876,18 @@ def _check_single_syscom_background_instrument(instrument, custom_emails=None):
 
 
 def check_and_send_seismograph_alert(custom_emails=None):
-    """SMG-1: Syscom background seismograph alerts (6h window, device 15092)."""
+    """SMG-1 / SMG1: Syscom background seismograph alerts (6h window, device 15092)."""
     print("Checking seismograph alerts using background API...")
     try:
-        if not is_instrument_active('SMG-1'):
-            print("SMG-1 is inactive; skipping seismograph alert check.")
+        instrument = find_instrument_by_id_candidates(['SMG-1', 'SMG1'])
+        if not instrument:
+            print("No instrument found for SMG-1 / SMG1")
+            log_alert_event("ERROR", "In check_and_send_seismograph_alert: No instrument found for SMG-1 / SMG1", 'SMG-1')
             return
 
-        # 1. Get instrument settings
-        instrument_resp = supabase.table('instruments').select('*').eq('instrument_id', 'SMG-1').execute()
-        instrument = instrument_resp.data[0] if instrument_resp.data else None
-        if not instrument:
-            print("No instrument found for SMG-1")
-            log_alert_event("ERROR", f"In check_and_send_seismograph_alert: No instrument found for SMG-1", 'SMG-1')
+        alert_instrument_id = instrument['instrument_id']
+        if not is_instrument_active(alert_instrument_id):
+            print(f"{alert_instrument_id} is inactive; skipping seismograph alert check.")
             return
 
         alert_value = instrument.get('alert_value')
@@ -984,7 +983,7 @@ def check_and_send_seismograph_alert(custom_emails=None):
 
             already_sent = supabase.table('sent_alerts') \
                 .select('id') \
-                .eq('instrument_id', 'SMG-1') \
+                .eq('instrument_id', alert_instrument_id) \
                 .eq('node_id', 15092) \
                 .eq('timestamp', timestamp) \
                 .execute()
@@ -1020,12 +1019,11 @@ def check_and_send_seismograph_alert(custom_emails=None):
             instrument_details = []
 
             try:
-                for smg_id in ['SMG-1']:
-                    instrument_info = get_project_info(smg_id)
-                    if instrument_info and instrument_info['project_name']:
-                        instrument_details.append(instrument_info)
-                        if instrument_info['project_name'] not in project_names:
-                            project_names.append(instrument_info['project_name'])
+                instrument_info = get_project_info(alert_instrument_id)
+                if instrument_info and instrument_info['project_name']:
+                    instrument_details.append(instrument_info)
+                    if instrument_info['project_name'] not in project_names:
+                        project_names.append(instrument_info['project_name'])
             except Exception as e:
                 print(f"Error getting project info for SMG instruments: {e}")
                 log_alert_event("ERROR", f"Error in check_and_send_seismograph_alert: getting project info for SMG instruments: {e}", 'SMG1')
@@ -1051,14 +1049,14 @@ def check_and_send_seismograph_alert(custom_emails=None):
                         alert_type = _determine_alert_type(alert_data['messages'])
 
                         sent_alert_resp = supabase.table('sent_alerts').insert({
-                            'instrument_id': 'SMG-1',
+                            'instrument_id': alert_instrument_id,
                             'node_id': 15092,
                             'timestamp': alert_data['timestamp'],
                             'alert_type': alert_type
                         }).execute()
                         if sent_alert_resp.data:
                             alert_id = sent_alert_resp.data[0]['id']
-                            log_alert_event("ALERT_RECORDED", f"Alert recorded in sent_alerts table with ID {alert_id}", 'SMG-1', alert_id)
+                            log_alert_event("ALERT_RECORDED", f"Alert recorded in sent_alerts table with ID {alert_id}", alert_instrument_id, alert_id)
                 else:
                     log_alert_event("SEND EMAIL_FAILED", f"Failed to send alert email for SMG-1", 'SMG-1')
             else:
