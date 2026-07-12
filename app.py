@@ -11,6 +11,7 @@ from routes.micromate_routes import micromate_bp
 from routes.payment_routes import payment_bp
 from routes.dgmts_static_routes import dgmts_static_bp
 from routes.access_software_routes import access_software_bp
+from routes.instrument_routes import instrument_bp
 
 # Create Flask app instance
 app = Flask(__name__)
@@ -34,6 +35,7 @@ app.register_blueprint(micromate_bp)
 app.register_blueprint(payment_bp)
 app.register_blueprint(dgmts_static_bp)
 app.register_blueprint(access_software_bp)
+app.register_blueprint(instrument_bp)
 
 # Root route
 @app.route('/')
