@@ -22,8 +22,13 @@ from services.instrument_route_service import resolve_micromate_device_folder
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
 
 INSTANTEL_NODE_IDS = {
-    'Instantel 1': 24252,
-    'Instantel 2': 24252,
+    'Instantel 1': 15783,
+    'Instantel 2': 16368,
+    'SMG2': 15783,
+    'SMG4': 16368,
+    'SMG-4': 16368,
+    'UM15783': 15783,
+    'UM16368': 16368,
 }
 
 INSTRUMENT_TO_NODE_ID = {v: k for k, v in Config.NODE_TO_INSTRUMENT_ID.items()}

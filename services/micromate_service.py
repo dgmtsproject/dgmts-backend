@@ -153,7 +153,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
             return result_summary
 
         alert_instrument_id = instrument['instrument_id']
-        alert_node_id = instrument.get('project_id') or 24252
+        # Stable node id from Micromate serial (not project_id — projects change)
+        alert_node_id = 15783
 
         # For micromate, use single values for each axis
         alert_value = instrument.get('alert_value')
@@ -162,14 +163,14 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
         
         # Threshold values configured
         
-        alert_emails = instrument.get('alert_emails') or []
-        warning_emails = instrument.get('warning_emails') or []
-        shutdown_emails = instrument.get('shutdown_emails') or []
+        alert_emails = [e for e in (instrument.get('alert_emails') or []) if e and str(e).strip()]
+        warning_emails = [e for e in (instrument.get('warning_emails') or []) if e and str(e).strip()]
+        shutdown_emails = [e for e in (instrument.get('shutdown_emails') or []) if e and str(e).strip()]
         
         # Check if emails are configured
         if not alert_emails and not warning_emails and not shutdown_emails:
-            print("⚠️  WARNING: No alert emails configured! Alerts cannot be sent.")
-            log_alert_event("ERROR", "No alert/warning/shutdown emails configured for Instantel 1", 'Instantel 1')
+            print(f"⚠️  WARNING: No alert emails configured for {alert_instrument_id} (UM15783)!")
+            log_alert_event("ERROR", "No alert/warning/shutdown emails configured for UM15783", alert_instrument_id)
         
         # Use custom emails if provided, otherwise use instrument emails
         if custom_emails:
@@ -177,6 +178,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
             warning_emails = custom_emails
             shutdown_emails = custom_emails
             print(f"Using custom emails for test: {custom_emails}")
+
+        print(f"UM15783 alert instrument={alert_instrument_id} sno={instrument.get('sno')} emails={len(alert_emails)+len(warning_emails)+len(shutdown_emails)}")
 
         # 2. Calculate time range for checking alerts (UM15783 CSV pipeline, mirrors Instantel 2)
         utc_now = datetime.now(timezone.utc)
@@ -516,16 +519,17 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
             return result_summary
 
         alert_instrument_id = instrument['instrument_id']
-        alert_node_id = instrument.get('project_id') or 24252
+        # Stable node id from Micromate serial (not project_id — projects change)
+        alert_node_id = 16368
 
         # For Instantel 2, use single values for each axis
         alert_value = instrument.get('alert_value')
         warning_value = instrument.get('warning_value')
         shutdown_value = instrument.get('shutdown_value')
 
-        alert_emails = instrument.get('alert_emails') or []
-        warning_emails = instrument.get('warning_emails') or []
-        shutdown_emails = instrument.get('shutdown_emails') or []
+        alert_emails = [e for e in (instrument.get('alert_emails') or []) if e and str(e).strip()]
+        warning_emails = [e for e in (instrument.get('warning_emails') or []) if e and str(e).strip()]
+        shutdown_emails = [e for e in (instrument.get('shutdown_emails') or []) if e and str(e).strip()]
         
         # Use custom emails if provided, otherwise use instrument emails
         if custom_emails:
@@ -536,6 +540,13 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
 
         all_emails = set(alert_emails + warning_emails + shutdown_emails)
         all_emails.add('dgmts.project@gmail.com')
+
+        print(
+            f"UM16368 alert instrument={alert_instrument_id} "
+            f"sno={instrument.get('sno')} name={instrument.get('instrument_name')} "
+            f"recipients={len(all_emails)} thresholds="
+            f"a={alert_value}/w={warning_value}/s={shutdown_value}"
+        )
 
         # if not all_emails:
         #     print('No alert emails configured for Instantel 2')
