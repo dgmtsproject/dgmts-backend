@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import csv
 import glob
@@ -12,6 +13,64 @@ from .instrument_route_service import find_micromate_instrument
 
 # Initialize Supabase client
 supabase = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+
+_INSTANTEL_FILE_TS_RE = re.compile(r'_(\d{14})\.', re.IGNORECASE)
+
+
+def _parse_instantel_filename_timestamp(file_path):
+    """Extract YYYYMMDDHHMMSS from Instantel CSV filename, or None."""
+    match = _INSTANTEL_FILE_TS_RE.search(os.path.basename(file_path))
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), '%Y%m%d%H%M%S')
+    except ValueError:
+        return None
+
+
+def _parse_filter_datetime(value, is_end=False):
+    """Parse Instantel filter date/datetime string to naive EST-local datetime."""
+    if not value:
+        return None
+    if len(value) == 10:
+        dt = datetime.strptime(value, '%Y-%m-%d')
+        if is_end:
+            dt = dt.replace(hour=23, minute=59, second=59)
+        return dt
+    if 'T' in value:
+        dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if dt.tzinfo is not None:
+            return dt.astimezone(pytz.timezone('US/Eastern')).replace(tzinfo=None)
+        return dt
+    return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
+
+
+def _filter_instantel_csv_files(csv_files, from_datetime=None, to_datetime=None):
+    """
+    Keep only IDFH files whose filename stamp overlaps the requested window.
+    Avoids opening hundreds of MB of historical CSVs on every alert check.
+    """
+    from_dt = _parse_filter_datetime(from_datetime, is_end=False)
+    to_dt = _parse_filter_datetime(to_datetime, is_end=True)
+    if not from_dt and not to_dt:
+        return csv_files
+
+    # Small buffer so files that start just before the window are not dropped
+    from_floor = (from_dt - timedelta(days=1)) if from_dt else None
+    to_ceiling = (to_dt + timedelta(days=1)) if to_dt else None
+
+    selected = []
+    for path in csv_files:
+        stamp = _parse_instantel_filename_timestamp(path)
+        if stamp is None:
+            selected.append(path)
+            continue
+        if from_floor and stamp < from_floor:
+            continue
+        if to_ceiling and stamp > to_ceiling:
+            continue
+        selected.append(path)
+    return selected
 
 def _determine_alert_type(messages):
     """Determine the highest priority alert type based on messages"""
@@ -1227,8 +1286,14 @@ def get_instantel_csv_readings(device_folder, from_datetime=None, to_datetime=No
             'errors': [f'No IDFH.csv files found in directory: {csv_directory}']
         }
     
-    # Sort files by name
+    # Sort files by name, then only open files in the requested date window
     csv_files.sort()
+    total_files_found = len(csv_files)
+    csv_files = _filter_instantel_csv_files(csv_files, from_datetime, to_datetime)
+    print(
+        f"[instantel-csv] {device_folder}: using {len(csv_files)}/{total_files_found} "
+        f"IDFH files for window {from_datetime} -> {to_datetime}"
+    )
     
     all_readings = []
     processed_files = []
@@ -1677,7 +1742,7 @@ def get_instantel_csv_readings(device_folder, from_datetime=None, to_datetime=No
                 'summary': {
                     'total_readings': len(all_readings),
                     'files_processed': len(processed_files),
-                    'files_found': len(csv_files),
+                    'files_found': total_files_found,
                     'errors_count': len(errors)
                 },
                 'processed_files': processed_files,
@@ -1719,7 +1784,7 @@ def get_instantel_csv_readings(device_folder, from_datetime=None, to_datetime=No
         'summary': {
             'total_readings': len(all_readings),
             'files_processed': len(processed_files),
-            'files_found': len(csv_files),
+            'files_found': total_files_found,
             'errors_count': len(errors)
         },
         'processed_files': processed_files,
