@@ -468,22 +468,20 @@ def _test_last_reading_internal(test_timestamp=None):
         warning_value = instrument.get('warning_value')
         shutdown_value = instrument.get('shutdown_value')
         
-        # 2. Fetch data from UM15783 CSV API (last 7 days)
+        # 2. Fetch data from UM15783 CSV directly (avoid HTTP self-call)
         est_tz = pytz.timezone('US/Eastern')
         now_est = datetime.now(est_tz)
         start_est = now_est - timedelta(days=7)
         from_date = start_est.strftime('%Y-%m-%d %H:%M:%S')
         to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
-        url = f"https://imsite.dullesgeotechnical.com/api/micromate/UM15783/readings?fromdatetime={from_date}&todatetime={to_date}"
-        response = requests.get(url)
-        if response.status_code != 200:
+        csv_result = get_um15783_readings(from_datetime=from_date, to_datetime=to_date)
+        if csv_result.get('errors') and not csv_result.get('readings'):
             return jsonify({
-                'error': f'Failed to fetch UM15783 data: {response.status_code}',
+                'error': f"Failed to fetch UM15783 data: {'; '.join(csv_result.get('errors') or [])}",
                 'status': 'error'
             }), 500
         
-        data = response.json()
-        um15783_readings = data.get('UM15783Readings', [])
+        um15783_readings = csv_result.get('readings') or []
         
         if not um15783_readings:
             return jsonify({

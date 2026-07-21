@@ -190,20 +190,19 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=1440,
         time_window_desc = f"{time_window_minutes / 1440:.1f} days" if time_window_minutes >= 1440 else f"{time_window_minutes / 60:.1f} hours" if time_window_minutes >= 60 else f"{time_window_minutes} minutes"
         print(f"Checking Instantel 1 (UM15783) data from {start_time.strftime('%Y-%m-%dT%H:%M:%S')} to {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST (last {time_window_desc})")
 
-        # 3. Fetch data from UM15783 CSV API with date filtering
+        # 3. Read CSV directly (never HTTP self-call — that deadlocks Gunicorn workers)
         from_date = start_time.strftime('%Y-%m-%d %H:%M:%S')
         to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
 
-        url = f"https://imsite.dullesgeotechnical.com/api/micromate/UM15783/readings?fromdatetime={from_date}&todatetime={to_date}"
-        response = requests.get(url)
-        if response.status_code != 200:
-            print(f"Failed to fetch UM15783 data: {response.status_code} {response.text}")
-            log_alert_event("ERROR", f"Failed to fetch UM15783 data: {response.status_code} {response.text}", 'Instantel 1')
-            result_summary['error'] = f"Failed to fetch UM15783 data: {response.status_code}"
+        csv_result = get_um15783_readings(from_datetime=from_date, to_datetime=to_date)
+        if csv_result.get('errors') and not csv_result.get('readings'):
+            err_msg = '; '.join(csv_result.get('errors') or ['unknown CSV error'])
+            print(f"Failed to fetch UM15783 data: {err_msg}")
+            log_alert_event("ERROR", f"Failed to fetch UM15783 data: {err_msg}", 'Instantel 1')
+            result_summary['error'] = f"Failed to fetch UM15783 data: {err_msg}"
             return result_summary
 
-        data = response.json()
-        um15783_readings = data.get('UM15783Readings', [])
+        um15783_readings = csv_result.get('readings') or []
 
         if not um15783_readings:
             print("No UM15783 data received")
@@ -582,27 +581,19 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440
         
         print(f"Checking Instantel 2 (UM16368) data from {start_time.strftime('%Y-%m-%dT%H:%M:%S')} to {now_est.strftime('%Y-%m-%dT%H:%M:%S')} EST (last {time_window_desc})")
 
-        # 3. Fetch data from UM16368 API with date filtering
-        # Check last 6 hours to reduce the number of readings
-        
-        # Format dates for API (YYYY-MM-DD HH:MM:SS format for more precise filtering)
+        # 3. Read CSV directly (never HTTP self-call — that deadlocks Gunicorn workers)
         from_date = start_time.strftime('%Y-%m-%d %H:%M:%S')
         to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
 
-        # 3. Fetch UM16368 data
-        url = f"https://imsite.dullesgeotechnical.com/api/micromate/UM16368/readings?fromdatetime={from_date}&todatetime={to_date}"
-        response = requests.get(url)
-
-        if response.status_code != 200:
-            print(f"Failed to fetch UM16368 data: {response.status_code} {response.text}")
-            log_alert_event("ERROR", f"Failed to fetch UM16368 data: {response.status_code} {response.text}", 'Instantel 2')
-            result_summary['error'] = f"Failed to fetch UM16368 data: {response.status_code}"
+        csv_result = get_um16368_readings(from_datetime=from_date, to_datetime=to_date)
+        if csv_result.get('errors') and not csv_result.get('readings'):
+            err_msg = '; '.join(csv_result.get('errors') or ['unknown CSV error'])
+            print(f"Failed to fetch UM16368 data: {err_msg}")
+            log_alert_event("ERROR", f"Failed to fetch UM16368 data: {err_msg}", 'Instantel 2')
+            result_summary['error'] = f"Failed to fetch UM16368 data: {err_msg}"
             return result_summary
 
-        data = response.json()
-        um16368_readings = data.get('UM16368Readings', [])
-        
-        # Filter info available in data['filters'] if needed
+        um16368_readings = csv_result.get('readings') or []
         
         if not um16368_readings:
             print("No UM16368 data received")

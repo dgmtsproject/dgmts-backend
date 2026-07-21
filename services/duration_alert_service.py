@@ -274,21 +274,19 @@ def _fetch_tiltmeter_readings(instrument_id, window_hours=24):
 
 
 def _fetch_instantel_readings_by_folder(device_folder, window_minutes=720):
-    node_id = 24252
+    node_id = 15783 if device_folder == 'UM15783' else 16368
     est_tz = pytz.timezone('US/Eastern')
     now_est = datetime.now(timezone.utc).astimezone(est_tz)
     start_est = now_est - timedelta(minutes=window_minutes)
     from_date = start_est.strftime('%Y-%m-%d %H:%M:%S')
     to_date = now_est.strftime('%Y-%m-%d %H:%M:%S')
-    response_key = f'{device_folder}Readings'
-    url = (
-        f'https://imsite.dullesgeotechnical.com/api/micromate/{device_folder}/readings'
-        f'?fromdatetime={from_date}&todatetime={to_date}'
+
+    from services.micromate_service import get_instantel_csv_readings
+
+    csv_result = get_instantel_csv_readings(
+        device_folder, from_datetime=from_date, to_datetime=to_date
     )
-    response = requests.get(url, timeout=60)
-    if response.status_code != 200:
-        return [], node_id
-    raw = response.json().get(response_key, [])
+    raw = csv_result.get('readings') or []
     readings = []
     for row in raw:
         readings.append({
