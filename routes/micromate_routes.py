@@ -256,10 +256,11 @@ def check_instantel2_alerts():
     This endpoint triggers the alert checking process using instrument-configured emails.
     """
     try:
-        check_and_send_instantel2_alert()
+        result = check_and_send_instantel2_alert()
         return jsonify({
-            'message': 'Instantel 2 alert check completed successfully',
-            'status': 'success'
+            'message': 'Instantel 2 alert check completed',
+            'status': 'error' if result.get('error') else 'success',
+            'summary': result,
         }), 200
     except Exception as e:
         return jsonify({

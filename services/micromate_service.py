@@ -103,11 +103,11 @@ def get_project_info(instrument_id):
         print(f"Error fetching project info for {instrument_id}: {e}")
         return None
 
-def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, force_resend=False):
+def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=1440, force_resend=False):
     """Check Instantel Micromate alerts and send emails if thresholds are exceeded
     
-    This function checks ALL readings from the last 6 hours by default. This ensures
-    all readings in the time window are checked so no alerts are missed.
+    This function checks ALL readings from the last 24 hours by default (FTP lag).
+    This ensures all readings in the time window are checked so no alerts are missed.
     
     For each reading:
     - If thresholds are exceeded AND no alert has been sent for that timestamp, send an alert
@@ -220,7 +220,14 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
         # --------------------------------------------------
         # 4. NO DATA INACTIVITY CHECK (1 HOUR)
         # --------------------------------------------------
-        latest_time_str = um15783_readings[-1]['Time']
+        # Prefer the newest reading by Time (API order is not guaranteed)
+        try:
+            latest_time_str = max(
+                (r.get('Time') for r in um15783_readings if r.get('Time')),
+                default=um15783_readings[-1]['Time'],
+            )
+        except Exception:
+            latest_time_str = um15783_readings[-1]['Time']
         dt_naive = datetime.strptime(latest_time_str, '%Y-%m-%d %H:%M:%S')
         dt_est = est_tz.localize(dt_naive)
         dt_utc = dt_est.astimezone(timezone.utc)
@@ -254,14 +261,19 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
                     log_alert_event('EMAIL_SENT', 'No data inactivity alert sent', 'Instantel 1')
                     result_summary['inactivity_alert_sent'] = True
 
-            return result_summary
-
-        # Clear inactivity alert if data resumed
-        supabase.table('sent_alerts') \
-            .delete() \
-            .eq('instrument_id', alert_instrument_id) \
-            .eq('alert_type', 'NO_DATA_1_HOUR') \
-            .execute()
+            # Do NOT return here — FTP often delivers late; still evaluate thresholds
+            # for readings that arrived with older timestamps (charts show them).
+            print(
+                f"UM15783 latest reading is {minutes_since_last:.0f} min old; "
+                f"continuing threshold checks on the alert window"
+            )
+        else:
+            # Clear inactivity alert if data resumed
+            supabase.table('sent_alerts') \
+                .delete() \
+                .eq('instrument_id', alert_instrument_id) \
+                .eq('alert_type', 'NO_DATA_1_HOUR') \
+                .execute()
 
         print(f"Received {len(um15783_readings)} UM15783 data points")
 
@@ -474,13 +486,14 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=720, 
         result_summary['error'] = str(e)
         return result_summary
 
-def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720, force_resend=False):
+def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440, force_resend=False):
     """Check Instantel 2 (UM16368) alerts and send emails if thresholds are exceeded
            Also sends an alert if no new data is received for 1 hour
 
     Args:
         custom_emails (list, optional): Custom email addresses to use instead of instrument emails
-        time_window_minutes (int, optional): Time window in minutes to check for alerts. Default is 720 minutes (12 hours).
+        time_window_minutes (int, optional): Time window in minutes to check for alerts.
+            Default is 1440 minutes (24 hours) to absorb FTP delivery lag.
         force_resend (bool, optional): If True, will resend alerts even if they were already sent (for testing). Default is False.
     
     Returns:
@@ -600,7 +613,14 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
         # --------------------------------------------------
         # 4. NO DATA INACTIVITY CHECK (1 HOUR)
         # --------------------------------------------------
-        latest_time_str = um16368_readings[-1]['Time']
+        # Prefer the newest reading by Time (API order is not guaranteed)
+        try:
+            latest_time_str = max(
+                (r.get('Time') for r in um16368_readings if r.get('Time')),
+                default=um16368_readings[-1]['Time'],
+            )
+        except Exception:
+            latest_time_str = um16368_readings[-1]['Time']
         dt_naive = datetime.strptime(latest_time_str, '%Y-%m-%d %H:%M:%S')
         dt_est = est_tz.localize(dt_naive)
         dt_utc = dt_est.astimezone(timezone.utc)
@@ -635,14 +655,19 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=720,
                     log_alert_event('EMAIL_SENT', 'No data inactivity alert sent', 'Instantel 2')
                     result_summary['inactivity_alert_sent'] = True
 
-            return result_summary
-
-        # Clear inactivity alert if data resumed
-        supabase.table('sent_alerts') \
-            .delete() \
-            .eq('instrument_id', alert_instrument_id) \
-            .eq('alert_type', 'NO_DATA_1_HOUR') \
-            .execute()
+            # Do NOT return here — FTP often delivers late; still evaluate thresholds
+            # for readings that arrived with older timestamps (charts show them).
+            print(
+                f"UM16368 latest reading is {minutes_since_last:.0f} min old; "
+                f"continuing threshold checks on the alert window"
+            )
+        else:
+            # Clear inactivity alert if data resumed
+            supabase.table('sent_alerts') \
+                .delete() \
+                .eq('instrument_id', alert_instrument_id) \
+                .eq('alert_type', 'NO_DATA_1_HOUR') \
+                .execute()
 
         # --------------------------------------------------
         # 5. Threshold checks (original logic)
