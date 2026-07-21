@@ -2,11 +2,29 @@ import os
 import json
 import glob
 import re
+import threading
+import traceback
 from flask import Blueprint, jsonify, current_app, request
 from config import Config
 from services.micromate_service import check_and_send_micromate_alert, check_and_send_instantel2_alert, get_um16368_readings, get_um15783_readings
 
 micromate_bp = Blueprint('micromate', __name__, url_prefix='/api/micromate')
+
+
+def _run_alert_job_async(label, fn, **kwargs):
+    """Run alert check off the HTTP worker thread so Gunicorn/Passenger cannot time out."""
+    def _target():
+        try:
+            print(f"[async-alert] Starting {label}")
+            result = fn(**kwargs)
+            print(f"[async-alert] Finished {label}: {result}")
+        except Exception:
+            print(f"[async-alert] FAILED {label}:")
+            traceback.print_exc()
+
+    thread = threading.Thread(target=_target, daemon=True, name=f'alert-{label}')
+    thread.start()
+    return thread
 
 @micromate_bp.route('/readings', methods=['GET'])
 def get_micromate_readings():
@@ -252,16 +270,29 @@ def check_micromate_alerts_custom():
 @micromate_bp.route('/instantel2/check-alerts', methods=['POST'])
 def check_instantel2_alerts():
     """
-    Check Instantel 2 (UM16368) alerts and send emails if thresholds are exceeded.
-    This endpoint triggers the alert checking process using instrument-configured emails.
+    Trigger Instantel 2 (UM16368) alert check.
+
+    Default: runs in a background thread and returns 202 immediately so
+    Gunicorn/Passenger cannot abort the HTTP worker mid-check.
+    Pass ?sync=1 for a blocking response (CLI diagnose script is preferred).
     """
     try:
-        result = check_and_send_instantel2_alert()
+        sync = (request.args.get('sync') or '').lower() in ('1', 'true', 'yes')
+        if sync:
+            result = check_and_send_instantel2_alert()
+            return jsonify({
+                'message': 'Instantel 2 alert check completed',
+                'status': 'error' if result.get('error') else 'success',
+                'summary': result,
+            }), 200
+
+        _run_alert_job_async('instantel2', check_and_send_instantel2_alert)
         return jsonify({
-            'message': 'Instantel 2 alert check completed',
-            'status': 'error' if result.get('error') else 'success',
-            'summary': result,
-        }), 200
+            'message': 'Instantel 2 alert check started in background',
+            'status': 'accepted',
+            'note': 'Use python scripts/diagnose_instantel2_alerts.py for sync diagnostics, '
+                    'or POST ?sync=1 only for short tests.',
+        }), 202
     except Exception as e:
         return jsonify({
             'error': f'Failed to check Instantel 2 alerts: {str(e)}',
@@ -284,6 +315,7 @@ def check_instantel2_alerts_custom():
     The time window is 1 week (10,080 minutes) from the current time.
     
     Note: This is a TEST endpoint and does not affect the production scheduled alerts.
+    Default: async 202. Pass ?sync=1 for a blocking response.
     """
     try:
         # Get request data
@@ -319,43 +351,50 @@ def check_instantel2_alerts_custom():
                 'message': f'The following email addresses are invalid: {invalid_emails}'
             }), 400
         
-        # Check alerts with custom emails for the past 1 week (7 days = 10080 minutes)
         one_week_minutes = 7 * 24 * 60  # 10080 minutes
-        result = check_and_send_instantel2_alert(custom_emails=emails, time_window_minutes=one_week_minutes, force_resend=force_resend)
-        
-        response_data = {
-            'message': 'Instantel 2 alert check completed successfully',
-            'status': 'success',
-            'emails_sent_to': emails,
-            'total_recipients': len(emails),
-            'time_window': '1 week (7 days)',
-            'time_window_minutes': one_week_minutes
-        }
-        
-        # Add detailed results if available
-        if result:
-            response_data.update({
-                'total_readings_checked': result.get('total_readings_checked', 0),
-                'readings_with_alerts': result.get('readings_with_alerts', 0),
-                'readings_already_sent': result.get('readings_already_sent', 0),
-                'emails_sent': result.get('emails_sent', 0),
-                'alert_timestamps': result.get('alert_timestamps', []),
-                'skipped_timestamps_count': len(result.get('skipped_timestamps', [])),
+        sync = (request.args.get('sync') or '').lower() in ('1', 'true', 'yes')
+        if sync:
+            result = check_and_send_instantel2_alert(
+                custom_emails=emails,
+                time_window_minutes=one_week_minutes,
+                force_resend=force_resend,
+            )
+            response_data = {
+                'message': 'Instantel 2 alert check completed successfully',
+                'status': 'success',
+                'emails_sent_to': emails,
+                'total_recipients': len(emails),
+                'time_window': '1 week (7 days)',
+                'time_window_minutes': one_week_minutes,
                 'force_resend': force_resend,
-                'test_mode': True  # Indicate this is a test endpoint
-            })
-            
-            # Add error if any
-            if 'error' in result:
+                'test_mode': True,
+                'summary': result,
+            }
+            if result and result.get('error'):
                 response_data['error'] = result['error']
                 response_data['status'] = 'error'
-        
-        return jsonify(response_data), 200
-        
+            return jsonify(response_data), 200
+
+        _run_alert_job_async(
+            'instantel2-custom',
+            check_and_send_instantel2_alert,
+            custom_emails=emails,
+            time_window_minutes=one_week_minutes,
+            force_resend=force_resend,
+        )
+        return jsonify({
+            'message': 'Instantel 2 custom alert check started in background',
+            'status': 'accepted',
+            'emails_sent_to': emails,
+            'force_resend': force_resend,
+            'time_window': '1 week (7 days)',
+            'test_mode': True,
+        }), 202
     except Exception as e:
         return jsonify({
             'error': f'Failed to check Instantel 2 alerts: {str(e)}',
-            'message': 'An error occurred while checking alerts'
+            'message': 'An error occurred while checking alerts',
+            'traceback': traceback.format_exc(),
         }), 500
 
 @micromate_bp.route('/test-last-reading', methods=['GET', 'POST'])

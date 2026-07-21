@@ -22,7 +22,7 @@ def send_email(to_email, subject, body):
         print(f"SMTP Server: {Config.SMTP_SERVER}:{Config.SMTP_PORT}")
         print(f"Username: {Config.EMAIL_USERNAME}")
         
-        server = smtplib.SMTP_SSL(Config.SMTP_SERVER, Config.SMTP_PORT)
+        server = smtplib.SMTP_SSL(Config.SMTP_SERVER, Config.SMTP_PORT, timeout=30)
         print("SMTP SSL connection established")
         
         server.login(Config.EMAIL_USERNAME, Config.EMAIL_PASSWORD)
@@ -38,6 +38,9 @@ def send_email(to_email, subject, body):
         return False
     except smtplib.SMTPException as e:
         print(f'SMTP Error: {e}')
+        return False
+    except TimeoutError as e:
+        print(f'SMTP Timeout: {e}')
         return False
     except Exception as e:
         print(f'Failed to send email: {e}')
