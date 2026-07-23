@@ -511,6 +511,17 @@ DGMTS Team
                 '''
             }
             
+            # TEST MODE: if testRecipient is set, BOTH emails go ONLY to that
+            # address — no accounting/team recipients, no bcc. Used by
+            # /api/test-payment-email so tests never reach real staff.
+            test_recipient = data.get('testRecipient')
+            if test_recipient:
+                for opts in (processed_mail_options, confirmation_mail_options):
+                    opts['to'] = test_recipient
+                    opts.pop('bcc', None)
+                    opts['subject'] = f"[TEST] {opts['subject']}"
+                print(f"Payment test mode: all recipients overridden to {test_recipient}")
+
             # Durable delivery: persist both emails to the email_outbox table
             # BEFORE attempting to send. If the inline send fails (SMTP outage,
             # Gmail block, killed Gunicorn worker, ...), the scheduler retries
@@ -2905,12 +2916,18 @@ def test_payment_email():
             'paymentNote': data.get('paymentNote', 'Test payment for geotechnical monitoring services')
         }
         
+        # SAFE BY DEFAULT: test emails go ONLY to the customer email.
+        # The accounting team is included only with an explicit "sendToTeam": true.
+        send_to_team = bool(data.get('sendToTeam', False))
+
         # Create the request payload for the send-mail endpoint
         mail_request = {
             'type': 'payment',
             'email': test_payment_data['customerEmail'],
             'paymentData': test_payment_data
         }
+        if not send_to_team:
+            mail_request['testRecipient'] = test_payment_data['customerEmail']
         
         print(f"Sending test payment email to: {test_payment_data['customerEmail']}")
         print(f"Payment amount: ${test_payment_data['amount']:.2f}")
@@ -2925,10 +2942,8 @@ def test_payment_email():
             )
             
             if response.status_code == 200:
-                return jsonify({
-                    'success': True,
-                    'message': 'Test payment emails sent successfully! (2 emails sent)',
-                    'details': {
+                if send_to_team:
+                    recipients_info = {
                         'email1_PaymentProcessed': {
                             'to': ['thamid@dullesgeotechnical.com', 'accounting@dullesgeotechnical.com'],
                             'bcc': ['iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com', 'mhussaini@dullesgeotechnical.com']
@@ -2936,7 +2951,19 @@ def test_payment_email():
                         'email2_PaymentConfirmation': {
                             'to': test_payment_data['customerEmail'],
                             'bcc': ["accounting@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com", "mhussaini@dullesgeotechnical.com"]
-                        },
+                        }
+                    }
+                else:
+                    recipients_info = {
+                        'testMode': True,
+                        'allRecipientsOverriddenTo': test_payment_data['customerEmail'],
+                        'note': 'No team/bcc recipients contacted. Pass "sendToTeam": true to include them.'
+                    }
+                return jsonify({
+                    'success': True,
+                    'message': 'Test payment emails sent successfully! (2 emails sent)',
+                    'details': {
+                        **recipients_info,
                         'invoiceNo': test_payment_data['invoiceNo'],
                         'amount': f"${test_payment_data['amount']:.2f}",
                         'transactionId': test_payment_data['transactionId']
