@@ -43,6 +43,15 @@ def _run_instantel2():
     return _run_exclusive('instantel2', check_and_send_instantel2_alert)
 
 
+def _run_email_outbox():
+    """Retry pending outbox emails (payment notifications) so they are never lost."""
+    try:
+        from services.email_outbox_service import process_pending
+        process_pending()
+    except Exception as e:
+        print(f"[scheduler] email outbox retry error: {e}")
+
+
 def run_scheduler():
     """Run the scheduler in a background thread"""
     while True:
@@ -65,6 +74,10 @@ def setup_scheduled_tasks():
     schedule.every(5).minutes.do(_run_instantel1)
     schedule.every(5).minutes.do(_run_instantel2)
     schedule.every(5).minutes.do(check_and_send_all_duration_alerts)
+
+    # Retry any payment/notification emails that failed to send inline
+    # (rows in email_outbox with status='pending'). Lightweight; single worker.
+    schedule.every(2).minutes.do(_run_email_outbox)
 
     for instrument_id in Config.ROCK_SEISMOGRAPH_INSTRUMENTS.keys():
         schedule.every().minute.do(check_and_send_rock_seismograph_alert, instrument_id)

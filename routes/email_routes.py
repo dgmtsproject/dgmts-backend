@@ -11,6 +11,8 @@ from services.connection_monitor_service import check_and_send_connection_lost_a
 from services.instrument_utils import get_display_instrument_id
 from supabase import create_client, Client
 from config import Config
+from models.static_db import static_db
+from services import email_outbox_service
 from datetime import datetime, timezone
 import pytz
 import smtplib
@@ -85,35 +87,27 @@ def dgmts_static_send_mail():
         
         print(f'Email request received: type={email_type}, email={email}')
         
-        # Get email configurations from DGMTS Static Supabase (unchanged; not the Postgres migration)
+        # Email configs now come from the LOCAL Postgres (dgmts_static_db) — the same
+        # copy the admin panel edits — instead of the old DGMTS Static Supabase.
+        # load_email_configs() returns usable rows SECONDARY FIRST because the
+        # primary row holds stale credentials that fail SMTP auth.
         try:
-            print('Connecting to DGMTS Static Supabase (send-mail)...')
-            print(f'DGMTS Static Supabase URL: {Config.DGMTS_STATIC_SUPABASE_URL}')
-            print(f'DGMTS Static Supabase key set: {bool(Config.DGMTS_STATIC_SUPABASE_KEY)}')
-            dgmts_supabase = create_client(
-                Config.DGMTS_STATIC_SUPABASE_URL, Config.DGMTS_STATIC_SUPABASE_KEY
-            )
-            print('Querying email_config from DGMTS Static Supabase...')
-            email_configs_resp = dgmts_supabase.table('email_config').select('*').order('type').execute()
-            if not email_configs_resp.data:
+            email_configs = email_outbox_service.load_email_configs()
+            if not email_configs:
                 return jsonify({'error': 'Email configuration not found. Please configure email settings in the admin panel.'}), 500
 
-            # Separate primary and secondary configs
             primary_config = next(
-                (c for c in email_configs_resp.data if c.get('type') == 'primary'),
-                email_configs_resp.data[0]
+                (c for c in email_configs if c.get('type') == 'primary'),
+                email_configs[-1]
             )
             secondary_config = next(
-                (c for c in email_configs_resp.data if c.get('type') == 'secondary'),
+                (c for c in email_configs if c.get('type') == 'secondary'),
                 None
             )
-            
+
             print(f'Primary config found: {primary_config.get("email_id") if primary_config else "None"}')
             print(f'Secondary config found: {secondary_config.get("email_id") if secondary_config else "None"}')
-            
-            if not primary_config or not primary_config.get('email_id') or not primary_config.get('email_password'):
-                return jsonify({'error': 'Primary email configuration is incomplete'}), 500
-                
+
         except Exception as db_error:
             import traceback
             print(f'Database error: {db_error}')
@@ -130,25 +124,19 @@ def dgmts_static_send_mail():
             else:
                 return {'host': 'smtp.office365.com', 'port': 587}
         
-        # Get primary SMTP settings
-        primary_smtp = get_smtp_settings(primary_config['email_id'])
-        from_email_name = primary_config.get('from_email_name', 'DGMTS').strip()
-        
-        # Determine which config to use based on test mode
-        # When test mode is enabled, use secondary email if available
-        active_config = primary_config
-        if is_test_mode and secondary_config:
-            active_config = secondary_config
-            from_email_name = secondary_config.get('from_email_name', 'DGMTS Test').strip()
-            print(f"Test mode enabled - using secondary config ({secondary_config['email_id']})")
+        # Use the secondary config by default (primary credentials are stale and
+        # fail SMTP auth); primary remains available as fallback.
+        active_config = email_configs[0]
+        from_email_name = (active_config.get('from_email_name') or 'DGMTS').strip()
+        print(f"Using {active_config.get('type', '?')} config ({active_config['email_id']}) as active sender")
         
         # BCC and admin emails
         bcc_emails = ["iaziz@dullesgeotechnical.com", "info@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"]
         payment_cc_emails = ["accounting@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com", "mhussaini@dullesgeotechnical.com"]
         
         # Function to send email with fallback
-        def send_email_with_fallback(mail_options, config_to_use=None):
-            config = config_to_use or primary_config
+        def send_email_with_fallback(mail_options, config_to_use=None, _allow_fallback=True):
+            config = config_to_use or active_config
             smtp_settings = get_smtp_settings(config['email_id'])
             
             try:
@@ -268,18 +256,17 @@ def dgmts_static_send_mail():
                 print(f"Email sent successfully using {config.get('type', 'primary')} config")
                 return {'success': True, 'used_config': config.get('type', 'primary')}
                 
-            except smtplib.SMTPAuthenticationError as e:
-                print(f"SMTP Authentication failed: {e}")
-                
-                # Try secondary config if available
-                if secondary_config and config == primary_config:
-                    print(f"Attempting secondary config ({secondary_config['email_id']})...")
-                    return send_email_with_fallback(mail_options, secondary_config)
-                else:
-                    raise Exception(f"Email authentication failed: {str(e)}")
-                    
             except Exception as e:
-                print(f"Email send failed: {e}")
+                print(f"Email send failed using {config.get('type', '?')} config ({config['email_id']}): {e}")
+
+                # Try the other config once (secondary <-> primary)
+                other_config = next(
+                    (c for c in email_configs if c is not config),
+                    None
+                )
+                if _allow_fallback and other_config:
+                    print(f"Retrying with {other_config.get('type', '?')} config ({other_config['email_id']})...")
+                    return send_email_with_fallback(mail_options, other_config, _allow_fallback=False)
                 raise
         
         # Build mail options based on type
@@ -291,7 +278,7 @@ def dgmts_static_send_mail():
                 return jsonify({'error': 'Missing required field: email'}), 400
             
             mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': email,
                 'subject': 'Test Email from DGMTS Email Configuration',
                 'text': 'TEST EMAIL FROM DGMTS\n\nThis is a test email. If you received this, your email configuration is working correctly!',
@@ -353,7 +340,7 @@ def dgmts_static_send_mail():
             
             # EMAIL 1: Payment Processed - sent to accounting team
             processed_mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': ['thamid@dullesgeotechnical.com', 'accounting@dullesgeotechnical.com'],
                 'bcc': ['iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com', 'mhussaini@dullesgeotechnical.com'],
                 'subject': f"💰 Payment Processed - Invoice #{invoice_no}",
@@ -443,7 +430,7 @@ DGMTS Payment System
             
             # EMAIL 2: Payment Confirmation - sent to customer
             confirmation_mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': customer_email,
                 'bcc': payment_cc_emails,
                 'subject': f"✅ Payment Confirmation - Invoice #{invoice_no}",
@@ -524,47 +511,71 @@ DGMTS Team
                 '''
             }
             
-            # Send both emails
+            # Durable delivery: persist both emails to the email_outbox table
+            # BEFORE attempting to send. If the inline send fails (SMTP outage,
+            # Gmail block, killed Gunicorn worker, ...), the scheduler retries
+            # them every 2 minutes until they go out — payment emails are never lost.
+            processed_outbox_id = None
+            confirmation_outbox_id = None
             try:
-                # Send internal "Payment Processed" email first
-                result1 = send_email_with_fallback(processed_mail_options, active_config)
-                if not result1.get('success'):
-                    print(f"Warning: Failed to send internal payment processed email")
-                
-                # Send customer "Payment Confirmation" email
-                result2 = send_email_with_fallback(confirmation_mail_options, active_config)
-                if not result2.get('success'):
-                    return jsonify({
-                        'error': 'Failed to send customer payment confirmation email',
-                        'success': False
-                    }), 500
-                
-                # Both emails sent successfully
+                processed_outbox_id = email_outbox_service.enqueue(
+                    'payment_processed', processed_mail_options)
+                confirmation_outbox_id = email_outbox_service.enqueue(
+                    'payment_confirmation', confirmation_mail_options)
+            except Exception as enqueue_error:
+                # Outbox unavailable — fall back to best-effort inline send below.
+                print(f"Warning: could not enqueue payment emails to outbox: {enqueue_error}")
+
+            processed_sent = email_outbox_service.send_outbox_email(
+                processed_outbox_id, processed_mail_options, email_configs)
+            confirmation_sent = email_outbox_service.send_outbox_email(
+                confirmation_outbox_id, confirmation_mail_options, email_configs)
+
+            queued_for_retry = [
+                outbox_id for outbox_id, sent in (
+                    (processed_outbox_id, processed_sent),
+                    (confirmation_outbox_id, confirmation_sent),
+                ) if outbox_id is not None and not sent
+            ]
+
+            if not processed_sent or not confirmation_sent:
+                print(f"Payment email(s) not sent inline; queued for retry: {queued_for_retry}")
+
+            # Emails are either sent or safely queued; only report failure if an
+            # email could neither be sent nor queued.
+            unrecoverable = (
+                (not processed_sent and processed_outbox_id is None) or
+                (not confirmation_sent and confirmation_outbox_id is None)
+            )
+            if unrecoverable:
                 return jsonify({
-                    'message': 'Payment emails sent successfully',
-                    'success': True,
+                    'error': 'Failed to send payment emails and could not queue them for retry',
+                    'success': False,
                     'details': {
-                        'processedEmailSent': result1.get('success', False),
-                        'confirmationEmailSent': result2.get('success', False)
+                        'processedEmailSent': processed_sent,
+                        'confirmationEmailSent': confirmation_sent
                     }
-                }), 200, {
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
-                    'Access-Control-Allow-Methods': 'POST, OPTIONS'
-                }
-                
-            except Exception as email_error:
-                print(f"Error sending payment emails: {email_error}")
-                import traceback
-                traceback.print_exc()
-                return jsonify({
-                    'error': f'Failed to send payment emails: {str(email_error)}',
-                    'success': False
                 }), 500, {
                     'Access-Control-Allow-Origin': '*',
                     'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
                     'Access-Control-Allow-Methods': 'POST, OPTIONS'
                 }
+
+            return jsonify({
+                'message': 'Payment emails sent successfully'
+                           if (processed_sent and confirmation_sent)
+                           else 'Payment emails queued; delivery will be retried automatically',
+                'success': True,
+                'details': {
+                    'processedEmailSent': processed_sent,
+                    'confirmationEmailSent': confirmation_sent,
+                    'queuedForRetry': queued_for_retry
+                }
+            }), 200, {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS'
+            }
             
         elif email_type == 'newsletter':
             # Newsletter subscription welcome email
@@ -575,14 +586,15 @@ DGMTS Team
             subscriber_token = token
             
             if not subscriber_token:
-                subscriber_resp = dgmts_supabase.table('subscribers').select('token').eq('email', email).execute()
-                if subscriber_resp.data:
-                    subscriber_token = subscriber_resp.data[0].get('token')
+                subscriber_row = static_db.query_one(
+                    'SELECT token FROM subscribers WHERE email = %s', (email,))
+                if subscriber_row:
+                    subscriber_token = subscriber_row.get('token')
             
             unsubscribe_url = f"https://dullesgeotechnical.com/unsubscribe?token={subscriber_token}" if subscriber_token else f"https://dullesgeotechnical.com/unsubscribe?email={email}"
             
             mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': email,
                 'bcc': bcc_emails,
                 'subject': '🎉 Welcome to DGMTS Newsletter!',
@@ -641,9 +653,10 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
             subscriber_token = token
             
             if not subscriber_token:
-                subscriber_resp = dgmts_supabase.table('subscribers').select('token').eq('email', email).execute()
-                if subscriber_resp.data:
-                    subscriber_token = subscriber_resp.data[0].get('token')
+                subscriber_row = static_db.query_one(
+                    'SELECT token FROM subscribers WHERE email = %s', (email,))
+                if subscriber_row:
+                    subscriber_token = subscriber_row.get('token')
             
             unsubscribe_url = f"https://dullesgeotechnical.com/unsubscribe?token={subscriber_token}" if subscriber_token else f"https://dullesgeotechnical.com/unsubscribe?email={email}"
             
@@ -788,7 +801,7 @@ You can unsubscribe at any time by visiting: {unsubscribe_url}
                 return jsonify({'error': 'Missing required fields for payment_portal_approval: applicantEmail, applicantName, userId, password'}), 400
             
             mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': applicant_email,
                 'subject': 'Payment Registration Approval',
                 'text': f'''
@@ -955,7 +968,7 @@ DGMTS Team
                 return jsonify({'error': 'Missing required fields for payment_portal_denial: applicantEmail, applicantName, reason'}), 400
             
             mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': applicant_email,
                 'subject': 'Payment Registration Request – Denied',
                 'text': f'''
@@ -1102,7 +1115,7 @@ DGMTS Team
             deny_url = f"{site_url}/payment-portal-approval?action=deny&userId={user_id}"
             
             mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': contact_person_email,
                 'subject': 'New User Payment Portal Registration Request',
                 'text': f'''
@@ -1372,7 +1385,7 @@ This is an automated message from the DGMTS Payment Portal System.
             current_year = datetime.now().year
             
             mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': contact_person_email,
                 'subject': '🔑 Password Reset Request - Payment Portal',
                 'text': f'''PASSWORD RESET REQUEST - PAYMENT PORTAL
@@ -1572,7 +1585,7 @@ This is an automated notification from the DGMTS Payment Portal system.
             current_year = datetime.now().year
             
             mail_options = {
-                'from': f"{from_email_name} <{primary_config['email_id']}>",
+                'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': applicant_email,
                 'subject': '✅ Your Payment Portal Password Has Been Reset',
                 'text': f'''PASSWORD RESET SUCCESSFUL - PAYMENT PORTAL
@@ -1762,7 +1775,7 @@ This is an automated notification from the DGMTS Payment Portal system.
                 return jsonify({'error': 'Missing required fields: name, email, message'}), 400
             
             mail_options = {
-                'from': f"{from_email_name} Contact Form <{primary_config['email_id']}>",
+                'from': f"{from_email_name} Contact Form <{active_config['email_id']}>",
                 'to': 'info@dullesgeotechnical.com',
                 'bcc': bcc_emails,
                 'reply_to': email,
@@ -1819,12 +1832,8 @@ Reply directly to this email to respond to {name}.
                 '''
             }
         
-        # Send email with fallback
-        # For subscriber_notification in test mode, use active_config (which may be secondary)
-        if email_type == 'subscriber_notification' and is_test_mode and secondary_config:
-            result = send_email_with_fallback(mail_options, active_config)
-        else:
-            result = send_email_with_fallback(mail_options)
+        # Send email with fallback (active_config is secondary-first by default)
+        result = send_email_with_fallback(mail_options)
         
         return jsonify({
             'message': 'Email sent successfully',
