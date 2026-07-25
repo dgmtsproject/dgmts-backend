@@ -87,6 +87,66 @@ class Config:
     AUTHORIZE_NET_TRANSACTION_KEY = os.getenv('AUTHORIZE_NET_TRANSACTION_KEY')
     AUTHORIZE_NET_SANDBOX = os.getenv('AUTHORIZE_NET_SANDBOX', 'false').lower() == 'true'  # Default to production
     
+    # ------------------------------------------------------------------
+    # Inventory & Purchase Management module (fully isolated, additive).
+    # Nothing above this block references these fields. Safe to remove the
+    # whole block + the inventory blueprint registration to disable the module.
+    # ------------------------------------------------------------------
+
+    # Toggle the entire Inventory module without a code change.
+    INVENTORY_MODULE_ENABLED = os.getenv('INVENTORY_MODULE_ENABLED', 'true').lower() == 'true'
+
+    # Inventory DB: lives in the SAME Postgres instance as the static DB, but in
+    # a dedicated `inventory` schema reached through its own role + pool.
+    INVENTORY_DB_HOST = os.getenv('INVENTORY_DB_HOST', os.getenv('STATIC_DB_HOST', '127.0.0.1'))
+    INVENTORY_DB_PORT = int(os.getenv('INVENTORY_DB_PORT', os.getenv('STATIC_DB_PORT', '5432')))
+    INVENTORY_DB_NAME = os.getenv('INVENTORY_DB_NAME', os.getenv('STATIC_DB_NAME', 'dgmts_static_db'))
+    INVENTORY_DB_USER = os.getenv('INVENTORY_DB_USER', 'dgmts_inventory_user')
+    INVENTORY_DB_PASSWORD = os.getenv('INVENTORY_DB_PASSWORD')
+    INVENTORY_DB_SCHEMA = os.getenv('INVENTORY_DB_SCHEMA', 'inventory')
+
+    # Microsoft SSO directory API — used to validate the frontend's bearer token
+    # (GET {base}/user/me) and to sync the employee/department directory cache.
+    INVENTORY_MS_API_BASE_URL = os.getenv(
+        'INVENTORY_MS_API_BASE_URL', 'https://ms.dullesgeotechnical.com/api/v2'
+    )
+    # Optional fallback bearer for server-side directory sync when no user token.
+    INVENTORY_MS_FALLBACK_BEARER = os.getenv('INVENTORY_MS_FALLBACK_BEARER')
+
+    # Emails allowed full inventory-admin access (Roles tab + admin-only APIs).
+    # Comma-separated; mirrors the frontend allowlist.
+    INVENTORY_ADMIN_EMAILS = [
+        e.strip().lower()
+        for e in os.getenv(
+            'INVENTORY_ADMIN_EMAILS',
+            'admin@gmail.com,iaziz@dullesgeotechnical.com,qhaider@dullesgeotechnical.com',
+        ).split(',')
+        if e.strip()
+    ]
+
+    # Signed token secret for PO email-action links (approve/reject via email).
+    INVENTORY_PO_EMAIL_ACTION_SECRET = os.getenv('INVENTORY_PO_EMAIL_ACTION_SECRET')
+
+    # Shared secret for trusted server-to-server calls from the Next.js backend
+    # (email-action routes have no user MS token). Sent as X-Inventory-Internal-Secret.
+    INVENTORY_INTERNAL_SECRET = (
+        os.getenv('INVENTORY_INTERNAL_SECRET')
+        or os.getenv('INVENTORY_PO_EMAIL_ACTION_SECRET')
+    )
+
+    # Public base URL of the Inventory frontend (for links inside emails).
+    INVENTORY_APP_PUBLIC_BASE = os.getenv(
+        'INVENTORY_APP_PUBLIC_BASE', 'https://dgmts-imsite.dullesgeotechnical.com'
+    )
+
+    # Inventory SMTP (custom mail system) — isolated from the module above.
+    INVENTORY_SMTP_HOST = os.getenv('INVENTORY_SMTP_HOST')
+    INVENTORY_SMTP_PORT = int(os.getenv('INVENTORY_SMTP_PORT', '465'))
+    INVENTORY_SMTP_USE_SSL = os.getenv('INVENTORY_SMTP_USE_SSL', 'true').lower() == 'true'
+    INVENTORY_SMTP_USERNAME = os.getenv('INVENTORY_SMTP_USERNAME')
+    INVENTORY_SMTP_PASSWORD = os.getenv('INVENTORY_SMTP_PASSWORD')
+    INVENTORY_SMTP_FROM = os.getenv('INVENTORY_SMTP_FROM') or os.getenv('INVENTORY_SMTP_USERNAME')
+
     # Reset tokens storage (in production, use Redis or database)
     RESET_TOKENS = {}
     

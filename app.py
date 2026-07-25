@@ -37,6 +37,17 @@ app.register_blueprint(dgmts_static_bp)
 app.register_blueprint(access_software_bp)
 app.register_blueprint(instrument_bp)
 
+# Inventory & Purchase Management module (isolated, additive).
+# Guarded by a flag and wrapped so an inventory-side import/config error can
+# never take down the existing backend. Remove this block to fully disable.
+if Config.INVENTORY_MODULE_ENABLED:
+    try:
+        from routes.inventory_routes import inventory_bp
+        app.register_blueprint(inventory_bp)
+        print("[inventory] module enabled at /api/inventory")
+    except Exception as _inv_err:  # noqa: BLE001
+        print(f"[inventory] module DISABLED (failed to load): {_inv_err}")
+
 # Root route
 @app.route('/')
 def index():
