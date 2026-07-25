@@ -154,6 +154,45 @@ def ms_auth_required(f):
     return decorated
 
 
+def _guest_principal() -> dict:
+    return {
+        "user_id": "",
+        "email": None,
+        "email_normalized": "",
+        "full_name": "guest",
+        "job_title_name": "",
+        "internal": False,
+        "raw": {},
+    }
+
+
+def ms_auth_optional(f):
+    """Attach user context when a valid token or the internal secret is present,
+    but NEVER reject the request.
+
+    The Inventory frontend has no token-refresh mechanism — the MS SSO token only
+    arrives via a redirect from another app, so the app runs tokenless most of
+    the time. This matches the prior Supabase posture where the anon key (public
+    in the frontend bundle) made the data layer effectively unauthenticated.
+    `request.inventory_user` is still populated (real profile, internal, or a
+    guest) so handlers can use identity when it happens to be available.
+    """
+
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if _internal_secret_ok():
+            request.inventory_user = _internal_principal()
+            request.inventory_bearer = Config.INVENTORY_MS_FALLBACK_BEARER
+            return f(*args, **kwargs)
+        token = _extract_bearer()
+        profile = validate_ms_token(token) if token else None
+        request.inventory_user = profile or _guest_principal()
+        request.inventory_bearer = token
+        return f(*args, **kwargs)
+
+    return decorated
+
+
 def ms_admin_required(f):
     """Require a valid MS token AND inventory-admin email (or the internal secret)."""
 

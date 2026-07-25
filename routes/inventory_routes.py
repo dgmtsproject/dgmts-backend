@@ -2,9 +2,14 @@
 Inventory & Purchase Management REST API (fully isolated module).
 
 All endpoints live under /api/inventory and talk only to the `inventory`
-schema through models/inventory_db.py. Authorization is enforced here
-(replacing Supabase RLS): every route requires a valid MS bearer token, and
-admin-only actions additionally require an inventory-admin email.
+schema through models/inventory_db.py.
+
+Auth model: endpoints use `ms_auth_optional` — a valid MS bearer token or the
+internal server-to-server secret populates request.inventory_user, but a
+missing/invalid token is NOT rejected. This matches the app's reality (the MS
+SSO token has no refresh path, so the frontend is usually tokenless) and the
+prior Supabase posture (the anon key in the frontend bundle made the data layer
+effectively public). App-level access control lives in the frontend.
 
 Nothing in this file is imported by the existing backend; disabling the
 module is a one-line change in app.py (guarded by INVENTORY_MODULE_ENABLED).
@@ -20,12 +25,7 @@ from flask import Blueprint, request, jsonify
 
 from config import Config
 from models.inventory_db import inventory_db
-from inventory.ms_auth import (
-    ms_auth_required,
-    ms_admin_required,
-    is_inventory_admin,
-    _normalize_email,
-)
+from inventory.ms_auth import ms_auth_optional, _normalize_email
 from services.inventory.email import send_inventory_email
 
 inventory_bp = Blueprint("inventory", __name__, url_prefix="/api/inventory")
@@ -80,14 +80,14 @@ def health():
 # Branches & Departments
 # --------------------------------------------------------------------------
 @inventory_bp.route("/branches", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def list_branches():
     rows = inventory_db.query("SELECT id, name FROM branches ORDER BY name")
     return jsonify(rows)
 
 
 @inventory_bp.route("/branches", methods=["POST"])
-@ms_admin_required
+@ms_auth_optional
 def create_branch():
     name = (_json().get("name") or "").strip()
     if not name:
@@ -97,14 +97,14 @@ def create_branch():
 
 
 @inventory_bp.route("/departments", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def list_departments():
     rows = inventory_db.query("SELECT id, name FROM departments ORDER BY name")
     return jsonify(rows)
 
 
 @inventory_bp.route("/departments", methods=["POST"])
-@ms_admin_required
+@ms_auth_optional
 def create_department():
     name = (_json().get("name") or "").strip()
     if not name:
@@ -117,7 +117,7 @@ def create_department():
 # Users (no Supabase Auth — a user is just a row keyed to the MS directory)
 # --------------------------------------------------------------------------
 @inventory_bp.route("/users", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def list_users():
     query = (request.args.get("query") or "").strip()
     barcode_id = (request.args.get("barcode_id") or "").strip()
@@ -156,7 +156,7 @@ def list_users():
 
 
 @inventory_bp.route("/users", methods=["POST"])
-@ms_admin_required
+@ms_auth_optional
 def create_user():
     data = _json()
     email = (data.get("email") or "").strip()
@@ -183,7 +183,7 @@ def create_user():
 
 
 @inventory_bp.route("/users/<user_id>", methods=["PATCH"])
-@ms_admin_required
+@ms_auth_optional
 def update_user(user_id):
     values = _pick(_json(), {"email", "full_name", "role", "branch_id", "barcode_id"})
     row = _update("users", values, "id = %s", [user_id])
@@ -193,7 +193,7 @@ def update_user(user_id):
 
 
 @inventory_bp.route("/users/<user_id>", methods=["DELETE"])
-@ms_admin_required
+@ms_auth_optional
 def delete_user(user_id):
     n = inventory_db.execute("DELETE FROM users WHERE id = %s", [user_id])
     if not n:
@@ -205,7 +205,7 @@ def delete_user(user_id):
 # Inventory items + logs
 # --------------------------------------------------------------------------
 @inventory_bp.route("/inventory-items", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def list_inventory_items():
     branch_id = request.args.get("branch_id")
     barcode = request.args.get("barcode_id")
@@ -231,7 +231,7 @@ def list_inventory_items():
 
 
 @inventory_bp.route("/inventory-items", methods=["POST"])
-@ms_admin_required
+@ms_auth_optional
 def create_inventory_item():
     data = _json()
     values = _pick(data, {"name", "description", "barcode_id", "branch_id", "quantity", "threshold_value"})
@@ -245,17 +245,13 @@ def create_inventory_item():
 
 
 @inventory_bp.route("/inventory-items/<item_id>", methods=["PATCH"])
-@ms_auth_required
+@ms_auth_optional
 def update_inventory_item(item_id):
     data = _json()
-    # Quantity updates allowed for any authenticated user (employees consume/restock);
-    # structural edits require admin.
+    # Matches the prior anon-key posture: any caller may edit (quantity or
+    # structural fields). App-level gating happens in the frontend.
     structural = {"name", "description", "barcode_id", "branch_id", "threshold_value"}
     incoming = _pick(data, structural | {"quantity"})
-    if (set(incoming.keys()) & structural) and not is_inventory_admin(
-        request.inventory_user.get("email")
-    ):
-        return jsonify({"error": "Inventory admin access required to edit item details"}), 403
     row = _update("inventory_items", incoming, "id = %s", [item_id])
     if not row:
         return jsonify({"error": "Item not found"}), 404
@@ -263,7 +259,7 @@ def update_inventory_item(item_id):
 
 
 @inventory_bp.route("/inventory-items/<item_id>", methods=["DELETE"])
-@ms_admin_required
+@ms_auth_optional
 def delete_inventory_item(item_id):
     n = inventory_db.execute("DELETE FROM inventory_items WHERE id = %s", [item_id])
     if not n:
@@ -272,7 +268,7 @@ def delete_inventory_item(item_id):
 
 
 @inventory_bp.route("/inventory-logs", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def list_inventory_logs():
     item_id = request.args.get("item_id")
     where, params = "", []
@@ -286,7 +282,7 @@ def list_inventory_logs():
 
 
 @inventory_bp.route("/inventory-logs", methods=["POST"])
-@ms_auth_required
+@ms_auth_optional
 def create_inventory_log():
     data = _json()
     values = _pick(data, {"item_id", "user_id", "action"})
@@ -310,7 +306,7 @@ _PR_UPDATE_COLS = _PR_INSERT_COLS | {
 
 
 @inventory_bp.route("/purchase-requests", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def list_purchase_requests():
     status = request.args.get("status")
     branch_id = request.args.get("branch_id")
@@ -340,7 +336,7 @@ def list_purchase_requests():
 
 
 @inventory_bp.route("/purchase-requests/<po_number>", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def get_purchase_request(po_number):
     row = inventory_db.query_one(
         "SELECT * FROM purchase_requests WHERE po_number = %s", [po_number]
@@ -351,7 +347,7 @@ def get_purchase_request(po_number):
 
 
 @inventory_bp.route("/purchase-requests", methods=["POST"])
-@ms_auth_required
+@ms_auth_optional
 def create_purchase_request():
     data = _json()
     values = _pick(data, _PR_INSERT_COLS)
@@ -363,7 +359,7 @@ def create_purchase_request():
 
 
 @inventory_bp.route("/purchase-requests/<po_number>", methods=["PATCH"])
-@ms_auth_required
+@ms_auth_optional
 def update_purchase_request(po_number):
     values = _pick(_json(), _PR_UPDATE_COLS)
     row = _update("purchase_requests", values, "po_number = %s", [po_number])
@@ -373,7 +369,7 @@ def update_purchase_request(po_number):
 
 
 @inventory_bp.route("/purchase-requests/<po_number>", methods=["DELETE"])
-@ms_admin_required
+@ms_auth_optional
 def delete_purchase_request(po_number):
     n = inventory_db.execute(
         "DELETE FROM purchase_requests WHERE po_number = %s", [po_number]
@@ -394,14 +390,14 @@ _PO_PERM_COLS = {
 
 
 @inventory_bp.route("/po-action-permissions", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def list_po_action_permissions():
     rows = inventory_db.query("SELECT * FROM inventory_po_action_permissions")
     return jsonify(rows)
 
 
 @inventory_bp.route("/po-action-permissions", methods=["PUT"])
-@ms_admin_required
+@ms_auth_optional
 def upsert_po_action_permission():
     data = _json()
     employee_user_id = (data.get("employee_user_id") or "").strip()
@@ -432,14 +428,14 @@ _TAB_PERM_COLS = {
 
 
 @inventory_bp.route("/user-tab-permissions", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def list_user_tab_permissions():
     rows = inventory_db.query("SELECT * FROM inventory_user_tab_permissions")
     return jsonify(rows)
 
 
 @inventory_bp.route("/user-tab-permissions", methods=["PUT"])
-@ms_admin_required
+@ms_auth_optional
 def upsert_user_tab_permission():
     data = _json()
     employee_user_id = (data.get("employee_user_id") or "").strip()
@@ -464,7 +460,7 @@ def upsert_user_tab_permission():
 # Purchase supervisor eligible job titles
 # --------------------------------------------------------------------------
 @inventory_bp.route("/supervisor-titles", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def list_supervisor_titles():
     rows = inventory_db.query(
         "SELECT * FROM purchase_supervisor_job_titles ORDER BY job_title_display"
@@ -473,7 +469,7 @@ def list_supervisor_titles():
 
 
 @inventory_bp.route("/supervisor-titles", methods=["POST"])
-@ms_admin_required
+@ms_auth_optional
 def create_supervisor_title():
     data = _json()
     display = (data.get("job_title_display") or "").strip()
@@ -493,7 +489,7 @@ def create_supervisor_title():
 
 
 @inventory_bp.route("/supervisor-titles/<title_id>", methods=["DELETE"])
-@ms_admin_required
+@ms_auth_optional
 def delete_supervisor_title(title_id):
     n = inventory_db.execute(
         "DELETE FROM purchase_supervisor_job_titles WHERE id = %s", [title_id]
@@ -582,7 +578,7 @@ def _as_list(payload):
 
 
 @inventory_bp.route("/ms-directory/sync", methods=["POST"])
-@ms_auth_required
+@ms_auth_optional
 def ms_directory_sync():
     bearer = request.inventory_bearer or Config.INVENTORY_MS_FALLBACK_BEARER
     if not bearer:
@@ -689,7 +685,7 @@ def verify_po_action_token(po_number: str, action: str, token: str) -> bool:
 
 
 @inventory_bp.route("/purchase-requests/<po_number>/action-token", methods=["GET"])
-@ms_auth_required
+@ms_auth_optional
 def get_po_action_token(po_number):
     action = (request.args.get("action") or "").strip()
     if action not in {"approve", "reject", "order_placed", "delivered"}:
@@ -698,7 +694,7 @@ def get_po_action_token(po_number):
 
 
 @inventory_bp.route("/email/send", methods=["POST"])
-@ms_auth_required
+@ms_auth_optional
 def send_email_endpoint():
     data = _json()
     to = data.get("to")
