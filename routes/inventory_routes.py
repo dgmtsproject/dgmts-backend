@@ -505,9 +505,15 @@ def delete_supervisor_title(title_id):
 
 # --------------------------------------------------------------------------
 # MS directory cache (employees / departments / meta) + sync
+#
+# The three GET reads are intentionally PUBLIC (no auth) to match the prior
+# Supabase anon-read policy on these cache tables. This keeps the frontend's
+# token-failure fallback working: when the MS /user/me token is invalid, the
+# app recovers the current user's identity from this cached directory using the
+# email stored in localStorage — which must succeed without a valid token.
+# Only `sync` (which writes + calls the MS API) requires authentication.
 # --------------------------------------------------------------------------
 @inventory_bp.route("/ms-directory/employees", methods=["GET"])
-@ms_auth_required
 def ms_directory_employees():
     q = (request.args.get("q") or "").strip().replace(",", " ")
     email_normalized = (request.args.get("email_normalized") or "").strip().lower()
@@ -537,7 +543,6 @@ def ms_directory_employees():
 
 
 @inventory_bp.route("/ms-directory/departments", methods=["GET"])
-@ms_auth_required
 def ms_directory_departments():
     rows = inventory_db.query(
         "SELECT ms_dept_id, name FROM ms_directory_departments ORDER BY name"
@@ -546,7 +551,6 @@ def ms_directory_departments():
 
 
 @inventory_bp.route("/ms-directory/meta", methods=["GET"])
-@ms_auth_required
 def ms_directory_meta():
     row = inventory_db.query_one("SELECT * FROM ms_directory_meta WHERE id = 1")
     return jsonify(row or {})
