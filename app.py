@@ -25,7 +25,7 @@ app.config.from_object(Config)
 CORS(app, 
      supports_credentials=True,
      allow_headers=['Content-Type', 'Authorization'],
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
+     methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
 
 # Register blueprints
 app.register_blueprint(auth_bp)
