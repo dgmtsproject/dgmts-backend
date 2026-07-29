@@ -54,6 +54,7 @@ def _ensure_table():
             CREATE TABLE IF NOT EXISTS email_outbox (
                 id BIGSERIAL PRIMARY KEY,
                 kind TEXT NOT NULL,
+                payment_id BIGINT,
                 mail_options JSONB NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 attempts INTEGER NOT NULL DEFAULT 0,
@@ -63,9 +64,17 @@ def _ensure_table():
                 sent_at TIMESTAMPTZ
             )
         """)
+        # Existing installs created the table before payment_id existed.
+        static_db.execute(
+            'ALTER TABLE email_outbox ADD COLUMN IF NOT EXISTS payment_id BIGINT'
+        )
         static_db.execute("""
             CREATE INDEX IF NOT EXISTS idx_email_outbox_pending
             ON email_outbox (next_attempt_at) WHERE status = 'pending'
+        """)
+        static_db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_email_outbox_payment_id
+            ON email_outbox (payment_id) WHERE payment_id IS NOT NULL
         """)
         _table_ready = True
 
@@ -149,15 +158,131 @@ def send_mail_options(mail_options, configs=None):
     raise last_error
 
 
-def enqueue(kind, mail_options):
+def enqueue(kind, mail_options, payment_id=None):
     """Persist an email before attempting to send it. Returns the outbox id."""
     _ensure_table()
     rows = static_db.execute(
-        'INSERT INTO email_outbox (kind, mail_options) VALUES (%s, %s) RETURNING id',
-        (kind, psycopg2.extras.Json(mail_options)),
+        '''
+        INSERT INTO email_outbox (kind, payment_id, mail_options)
+        VALUES (%s, %s, %s) RETURNING id
+        ''',
+        (kind, payment_id, psycopg2.extras.Json(mail_options)),
         returning=True,
     )
     return rows[0]['id']
+
+
+def _summarize_outbox_rows(rows):
+    """Collapse outbox rows for one payment into an admin-facing status."""
+    if not rows:
+        # No outbox rows — either sent before tracking existed, or never attempted.
+        # Do not call this "failed"; admin can still Resend.
+        return {
+            'overall': 'no_tracking',
+            'label': 'No tracking data',
+            'can_resend': True,
+            'emails': [],
+            'last_error': None,
+            'sent_at': None,
+        }
+
+    statuses = {r.get('status') for r in rows}
+    if statuses == {'sent'}:
+        overall, label = 'sent', 'Sent'
+    elif 'failed' in statuses and 'pending' not in statuses and 'sent' not in statuses:
+        overall, label = 'failed', 'Failed'
+    elif 'pending' in statuses:
+        overall, label = 'pending', 'Pending / queued'
+    elif 'failed' in statuses:
+        overall, label = 'partial', 'Partial / failed'
+    else:
+        overall, label = 'unknown', 'Unknown'
+
+    emails = []
+    last_error = None
+    latest_sent = None
+    for r in rows:
+        emails.append({
+            'id': r.get('id'),
+            'kind': r.get('kind'),
+            'status': r.get('status'),
+            'attempts': r.get('attempts') or 0,
+            'last_error': r.get('last_error'),
+            'created_at': r.get('created_at').isoformat() if r.get('created_at') else None,
+            'sent_at': r.get('sent_at').isoformat() if r.get('sent_at') else None,
+        })
+        if r.get('last_error'):
+            last_error = r.get('last_error')
+        if r.get('sent_at') and (latest_sent is None or r['sent_at'] > latest_sent):
+            latest_sent = r['sent_at']
+
+    return {
+        'overall': overall,
+        'label': label,
+        'can_resend': True,  # admin may always force a resend
+        'emails': emails,
+        'last_error': last_error,
+        'sent_at': latest_sent.isoformat() if latest_sent else None,
+    }
+
+
+def get_payment_email_status(payment_ids):
+    """
+    Return mail delivery status keyed by payment_id for the admin dashboard.
+    Missing outbox rows mean the payment never went through the durable path.
+    """
+    _ensure_table()
+    ids = []
+    for raw in payment_ids or []:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    result = {pid: _summarize_outbox_rows([]) for pid in ids}
+    if not ids:
+        return result
+
+    rows = static_db.query(
+        '''
+        SELECT id, kind, payment_id, status, attempts, last_error, created_at, sent_at
+        FROM email_outbox
+        WHERE payment_id = ANY(%s)
+        ORDER BY id ASC
+        ''',
+        (ids,),
+    )
+    by_payment = {}
+    for row in rows:
+        pid = row.get('payment_id')
+        if pid is None:
+            continue
+        by_payment.setdefault(int(pid), []).append(row)
+
+    for pid, group in by_payment.items():
+        result[pid] = _summarize_outbox_rows(group)
+    return result
+
+
+def payment_row_to_payment_data(payment):
+    """Build send-mail paymentData from a payments table row."""
+    total = float(payment.get('amount') or 0)
+    # Reverse service charge when possible: total = invoice * 0.029 + 0.30 + invoice
+    invoice_amount = round((total - 0.30) / 1.029, 2) if total > 0.30 else total
+    if invoice_amount < 0:
+        invoice_amount = total
+    service_charge = round(total - invoice_amount, 2)
+    return {
+        'customerName': payment.get('customer_name') or 'Valued Customer',
+        'customerEmail': payment.get('customer_email') or '',
+        'customerAddress': payment.get('customer_address') or '',
+        'invoiceNo': payment.get('invoice_no') or 'N/A',
+        'paymentNote': payment.get('payment_note') or '',
+        'transactionId': payment.get('transaction_id') or 'N/A',
+        'amount': total,
+        'invoiceAmount': invoice_amount,
+        'serviceCharge': service_charge,
+        'paymentMethod': payment.get('payment_method') or 'Credit Card',
+    }
 
 
 def mark_sent(outbox_id):

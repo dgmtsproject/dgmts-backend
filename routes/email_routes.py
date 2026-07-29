@@ -84,8 +84,13 @@ def dgmts_static_send_mail():
         custom_footer = data.get('customFooter')  # {footerText, linkText, linkUrl}
         is_test_mode = data.get('isTestMode', False)  # New: test mode to use secondary email
         payment_data = data.get('paymentData')
+        payment_id = data.get('paymentId') or data.get('payment_id')
+        try:
+            payment_id = int(payment_id) if payment_id is not None else None
+        except (TypeError, ValueError):
+            payment_id = None
         
-        print(f'Email request received: type={email_type}, email={email}')
+        print(f'Email request received: type={email_type}, email={email}, payment_id={payment_id}')
         
         # Email configs now come from the LOCAL Postgres (dgmts_static_db) — the same
         # copy the admin panel edits — instead of the old DGMTS Static Supabase.
@@ -530,9 +535,9 @@ DGMTS Team
             confirmation_outbox_id = None
             try:
                 processed_outbox_id = email_outbox_service.enqueue(
-                    'payment_processed', processed_mail_options)
+                    'payment_processed', processed_mail_options, payment_id=payment_id)
                 confirmation_outbox_id = email_outbox_service.enqueue(
-                    'payment_confirmation', confirmation_mail_options)
+                    'payment_confirmation', confirmation_mail_options, payment_id=payment_id)
             except Exception as enqueue_error:
                 # Outbox unavailable — fall back to best-effort inline send below.
                 print(f"Warning: could not enqueue payment emails to outbox: {enqueue_error}")
@@ -2877,6 +2882,121 @@ def test_dullesgeotechnical_mail():
             'error': 'Failed to send test email',
             'message': str(e)
         }), 500
+
+@email_bp.route('/dgmts-static/payment-emails/status', methods=['POST', 'OPTIONS'])
+def payment_emails_status():
+    """
+    Batch mail-delivery status for admin payments dashboard.
+
+    Body: { "payment_ids": [40, 39, ...] }
+    Returns: { "statuses": { "40": { overall, label, can_resend, emails, ... }, ... } }
+    """
+    if request.method == 'OPTIONS':
+        return '', 200, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'content-type, authorization',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        }
+    try:
+        data = request.get_json(silent=True) or {}
+        payment_ids = data.get('payment_ids') or data.get('paymentIds') or []
+        statuses = email_outbox_service.get_payment_email_status(payment_ids)
+        # JSON keys as strings for frontend convenience
+        return jsonify({
+            'statuses': {str(k): v for k, v in statuses.items()},
+            'error': None
+        }), 200, {'Access-Control-Allow-Origin': '*'}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'statuses': {}, 'error': str(e)}), 500, {
+            'Access-Control-Allow-Origin': '*'
+        }
+
+
+@email_bp.route('/dgmts-static/payment-emails/resend', methods=['POST', 'OPTIONS'])
+def payment_emails_resend():
+    """
+    Rebuild and resend payment emails for a payments.id row (admin dashboard).
+
+    Body: { "payment_id": 40 }
+    Always creates fresh outbox rows linked to that payment_id, then attempts
+    inline send (scheduler retries on failure).
+    """
+    if request.method == 'OPTIONS':
+        return '', 200, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'content-type, authorization',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS'
+        }
+    try:
+        from flask import current_app
+
+        data = request.get_json(silent=True) or {}
+        payment_id = data.get('payment_id') or data.get('paymentId')
+        try:
+            payment_id = int(payment_id)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'payment_id is required'}), 400, {
+                'Access-Control-Allow-Origin': '*'
+            }
+
+        payment = static_db.query_one(
+            'SELECT * FROM payments WHERE id = %s', (payment_id,))
+        if not payment:
+            return jsonify({'success': False, 'error': f'Payment {payment_id} not found'}), 404, {
+                'Access-Control-Allow-Origin': '*'
+            }
+
+        payment_data = email_outbox_service.payment_row_to_payment_data(payment)
+        customer_email = payment_data.get('customerEmail')
+        if not customer_email:
+            return jsonify({
+                'success': False,
+                'error': 'Payment has no customer_email; cannot resend'
+            }), 400, {'Access-Control-Allow-Origin': '*'}
+
+        mail_request = {
+            'type': 'payment',
+            'email': customer_email,
+            'paymentData': payment_data,
+            'paymentId': payment_id,
+        }
+
+        with current_app.test_client() as client:
+            response = client.post(
+                '/api/dgmts-static/send-mail',
+                json=mail_request,
+                content_type='application/json'
+            )
+            body = response.get_json(silent=True) or {}
+
+        statuses = email_outbox_service.get_payment_email_status([payment_id])
+        status = statuses.get(payment_id)
+
+        if response.status_code == 200 and body.get('success', True):
+            return jsonify({
+                'success': True,
+                'message': body.get('message') or 'Payment emails resent',
+                'details': body.get('details'),
+                'status': status,
+            }), 200, {'Access-Control-Allow-Origin': '*'}
+
+        return jsonify({
+            'success': False,
+            'error': body.get('error') or body.get('message') or 'Resend failed',
+            'details': body,
+            'status': status,
+        }), response.status_code if response.status_code >= 400 else 500, {
+            'Access-Control-Allow-Origin': '*'
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500, {
+            'Access-Control-Allow-Origin': '*'
+        }
+
 
 @email_bp.route('/test-payment-email', methods=['POST'])
 def test_payment_email():
