@@ -1,0 +1,327 @@
+/**
+ * Drop-in replacement for @supabase/supabase-js used by C:/Work/dgmts.
+ * Talks to Flask on the VPS: POST /api/imsite/data
+ *
+ * Copy to e.g. src/imsiteDbClient.ts and either:
+ *   - change src/supabase.ts to re-export this client, or
+ *   - set VITE_USE_IMSITE_API=true and branch in supabase.ts
+ *
+ * Same pattern as dgmts-static-migrate/src/dbClient.js
+ *
+ * NOT supported: PostgREST embeds like .select('project_id, Projects(id, name)')
+ * — split those into two queries when migrating pages.
+ */
+
+const API_BASE = (
+  (typeof import.meta !== 'undefined' &&
+    (import.meta as any).env?.VITE_DGMTS_API_URL) ||
+  'https://imsite.dullesgeotechnical.com'
+).replace(/\/$/, '');
+
+type Filter =
+  | { op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte'; col: string; val: unknown }
+  | { op: 'in'; col: string; vals: unknown[] }
+  | { op: 'is' | 'not_is'; col: string; val?: null };
+
+type Order = { col: string; asc: boolean };
+
+type BuilderState = {
+  table?: string;
+  op?: 'select' | 'insert' | 'update' | 'delete' | 'upsert';
+  columns?: string;
+  filters: Filter[];
+  order: Order[];
+  limit?: number;
+  offset?: number;
+  patch?: Record<string, unknown>;
+  insertRows?: Record<string, unknown>[];
+  onConflict?: string;
+  insertReturning?: boolean;
+  updateReturning?: boolean;
+  deleteReturning?: boolean;
+  wantSingle?: boolean;
+  wantMaybeSingle?: boolean;
+};
+
+async function postJson(path: string, body: unknown) {
+  const r = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  let j: any = null;
+  try {
+    j = await r.json();
+  } catch {
+    j = null;
+  }
+  return { ok: r.ok, j };
+}
+
+class QueryBuilder implements PromiseLike<{ data: any; error: { message: string } | null }> {
+  s: BuilderState;
+
+  constructor(state: Partial<BuilderState> & { filters?: Filter[]; order?: Order[] }) {
+    this.s = {
+      filters: [],
+      order: [],
+      ...state,
+    };
+  }
+
+  select(columns = '*') {
+    if (this.s.op === 'insert' && this.s.insertRows) {
+      return new QueryBuilder({ ...this.s, insertReturning: true });
+    }
+    if (this.s.op === 'update' && this.s.patch) {
+      return new QueryBuilder({ ...this.s, updateReturning: true });
+    }
+    if (this.s.op === 'delete') {
+      return new QueryBuilder({ ...this.s, deleteReturning: true });
+    }
+    return new QueryBuilder({ ...this.s, op: 'select', columns: columns || '*' });
+  }
+
+  insert(rows: Record<string, unknown> | Record<string, unknown>[]) {
+    const data = Array.isArray(rows) ? rows : [rows];
+    return new QueryBuilder({ ...this.s, op: 'insert', insertRows: data });
+  }
+
+  update(patch: Record<string, unknown>) {
+    return new QueryBuilder({ ...this.s, op: 'update', patch: patch || {} });
+  }
+
+  delete() {
+    return new QueryBuilder({ ...this.s, op: 'delete' });
+  }
+
+  upsert(
+    rows: Record<string, unknown> | Record<string, unknown>[],
+    opts: { onConflict?: string } = {},
+  ) {
+    const data = Array.isArray(rows) ? rows : [rows];
+    return new QueryBuilder({
+      ...this.s,
+      op: 'upsert',
+      insertRows: data,
+      onConflict: opts.onConflict || '',
+    });
+  }
+
+  eq(col: string, val: unknown) {
+    return new QueryBuilder({
+      ...this.s,
+      filters: [...this.s.filters, { op: 'eq', col, val }],
+    });
+  }
+
+  neq(col: string, val: unknown) {
+    return new QueryBuilder({
+      ...this.s,
+      filters: [...this.s.filters, { op: 'neq', col, val }],
+    });
+  }
+
+  in(col: string, vals: unknown[]) {
+    return new QueryBuilder({
+      ...this.s,
+      filters: [...this.s.filters, { op: 'in', col, vals: [...vals] }],
+    });
+  }
+
+  gt(col: string, val: unknown) {
+    return new QueryBuilder({
+      ...this.s,
+      filters: [...this.s.filters, { op: 'gt', col, val }],
+    });
+  }
+
+  gte(col: string, val: unknown) {
+    return new QueryBuilder({
+      ...this.s,
+      filters: [...this.s.filters, { op: 'gte', col, val }],
+    });
+  }
+
+  lt(col: string, val: unknown) {
+    return new QueryBuilder({
+      ...this.s,
+      filters: [...this.s.filters, { op: 'lt', col, val }],
+    });
+  }
+
+  lte(col: string, val: unknown) {
+    return new QueryBuilder({
+      ...this.s,
+      filters: [...this.s.filters, { op: 'lte', col, val }],
+    });
+  }
+
+  /** Supabase: .not(col, 'is', null) → IS NOT NULL */
+  not(col: string, operator: string, _val: unknown) {
+    if (operator === 'is') {
+      return new QueryBuilder({
+        ...this.s,
+        filters: [...this.s.filters, { op: 'not_is', col }],
+      });
+    }
+    throw new Error(`Unsupported .not() operator: ${operator}`);
+  }
+
+  is(col: string, val: null) {
+    if (val !== null) {
+      throw new Error('.is() only supports null in this shim');
+    }
+    return new QueryBuilder({
+      ...this.s,
+      filters: [...this.s.filters, { op: 'is', col }],
+    });
+  }
+
+  order(col: string, { ascending = true }: { ascending?: boolean } = {}) {
+    return new QueryBuilder({
+      ...this.s,
+      order: [...(this.s.order || []), { col, asc: !!ascending }],
+    });
+  }
+
+  limit(n: number) {
+    return new QueryBuilder({ ...this.s, limit: n });
+  }
+
+  /** Supabase inclusive range → offset + limit */
+  range(from: number, to: number) {
+    return new QueryBuilder({
+      ...this.s,
+      offset: from,
+      limit: to - from + 1,
+    });
+  }
+
+  single() {
+    return new QueryBuilder({ ...this.s, wantSingle: true });
+  }
+
+  maybeSingle() {
+    return new QueryBuilder({ ...this.s, wantMaybeSingle: true });
+  }
+
+  then<TResult1 = { data: any; error: { message: string } | null }, TResult2 = never>(
+    resolve?: ((value: { data: any; error: { message: string } | null }) => TResult1 | PromiseLike<TResult1>) | null,
+    reject?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+  ) {
+    return this._run().then(resolve as any, reject as any);
+  }
+
+  catch(reject: (reason: any) => any) {
+    return this._run().catch(reject);
+  }
+
+  async _run() {
+    const s = this.s;
+    if (!s.table) {
+      return { data: null, error: { message: 'Missing table' } };
+    }
+
+    try {
+      if (s.op === 'select') {
+        const { ok, j } = await postJson('/api/imsite/data', {
+          action: 'select',
+          table: s.table,
+          columns: s.columns || '*',
+          filters: s.filters,
+          order: s.order || [],
+          limit: s.limit,
+          offset: s.offset,
+          single: s.wantSingle,
+          maybe_single: s.wantMaybeSingle,
+        });
+        if (!ok) {
+          return { data: null, error: { message: j?.error?.message || 'Request failed' } };
+        }
+        if (j?.error) {
+          return { data: j.data ?? null, error: { message: j.error.message || String(j.error) } };
+        }
+        return { data: j.data, error: null };
+      }
+
+      if (s.op == null) {
+        return {
+          data: null,
+          error: { message: 'Incomplete query: call .select() or a mutation after .from()' },
+        };
+      }
+
+      if (s.op === 'insert') {
+        const { ok, j } = await postJson('/api/imsite/data', {
+          action: 'insert',
+          table: s.table,
+          rows: s.insertRows,
+          returning: !!s.insertReturning,
+        });
+        if (!ok || j?.error?.message) {
+          return { data: null, error: { message: j?.error?.message || 'Insert failed' } };
+        }
+        let d = j.data;
+        if (s.insertReturning && s.wantSingle) {
+          d = Array.isArray(d) ? d[0] ?? null : d;
+        }
+        return { data: d, error: null };
+      }
+
+      if (s.op === 'update') {
+        const { ok, j } = await postJson('/api/imsite/data', {
+          action: 'update',
+          table: s.table,
+          patch: s.patch,
+          filters: s.filters,
+          returning: !!s.updateReturning,
+        });
+        if (!ok || j?.error?.message) {
+          return { data: null, error: { message: j?.error?.message || 'Update failed' } };
+        }
+        return { data: j.data, error: null };
+      }
+
+      if (s.op === 'delete') {
+        const { ok, j } = await postJson('/api/imsite/data', {
+          action: 'delete',
+          table: s.table,
+          filters: s.filters,
+          returning: !!s.deleteReturning,
+        });
+        if (!ok || j?.error?.message) {
+          return { data: null, error: { message: j?.error?.message || 'Delete failed' } };
+        }
+        return { data: j.data, error: null };
+      }
+
+      if (s.op === 'upsert') {
+        const { ok, j } = await postJson('/api/imsite/data', {
+          action: 'upsert',
+          table: s.table,
+          rows: s.insertRows,
+          on_conflict: s.onConflict,
+        });
+        if (!ok || j?.error?.message) {
+          return { data: null, error: { message: j?.error?.message || 'Upsert failed' } };
+        }
+        return { data: j.data, error: null };
+      }
+
+      return { data: null, error: { message: 'Unsupported query' } };
+    } catch (e: any) {
+      return { data: null, error: { message: e?.message || String(e) } };
+    }
+  }
+}
+
+/** Kept for API compatibility with createClient(url, key). */
+export function createClient(_url?: string, _key?: string) {
+  return {
+    from: (table: string) => new QueryBuilder({ table }),
+  };
+}
+
+export const supabase = createClient();
+export default supabase;

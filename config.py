@@ -33,6 +33,15 @@ class Config:
     # Public base URL of this Flask app (used for public media URLs, no trailing slash)
     STATIC_APP_PUBLIC_BASE = os.getenv('STATIC_APP_PUBLIC_BASE', 'https://imsite.dullesgeotechnical.com')
 
+    # Imsite instrumentation DB — local copy of Supabase xmhiocoinswgxvqokuzd (dgmts_db).
+    # Used by /api/imsite/* CRUD. App services may still use SUPABASE_* until full cutover.
+    IMSITE_DB_HOST = os.getenv('IMSITE_DB_HOST', '127.0.0.1')
+    IMSITE_DB_PORT = int(os.getenv('IMSITE_DB_PORT', '5432'))
+    IMSITE_DB_NAME = os.getenv('IMSITE_DB_NAME', 'dgmts_db')
+    IMSITE_DB_USER = os.getenv('IMSITE_DB_USER', 'dgmts_user')
+    IMSITE_DB_PASSWORD = os.getenv('IMSITE_DB_PASSWORD')
+
+
     # On-disk store for public uploaded images (replaces Supabase Storage buckets)
     STATIC_MEDIA_DIR = os.getenv('STATIC_MEDIA_DIR', 'static_media')
 
