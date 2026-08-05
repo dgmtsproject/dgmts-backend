@@ -171,6 +171,53 @@ def imsite_health():
     return jsonify({"status": "ok" if ok else "degraded", "db": ok}), (200 if ok else 503)
 
 
+@imsite_bp.route("/projects", methods=["GET", "OPTIONS"])
+def imsite_projects():
+    """Simple GET for Postman smoke tests — lists rows from public."Projects"."""
+    if request.method == "OPTIONS":
+        return "", 200, {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+        }
+    try:
+        rows = imsite_db.query(
+            'SELECT * FROM "Projects" ORDER BY id ASC'
+        )
+        return _ok(rows)
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return _err(str(e), 500)
+
+
+@imsite_bp.route("/instruments", methods=["GET", "OPTIONS"])
+def imsite_instruments():
+    """Simple GET for Postman — lists instruments (optional ?project_id=)."""
+    if request.method == "OPTIONS":
+        return "", 200, {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+        }
+    try:
+        project_id = request.args.get("project_id")
+        if project_id is not None and project_id != "":
+            rows = imsite_db.query(
+                "SELECT * FROM instruments WHERE project_id = %s ORDER BY instrument_id ASC",
+                (project_id,),
+            )
+        else:
+            rows = imsite_db.query(
+                "SELECT * FROM instruments ORDER BY instrument_id ASC"
+            )
+        return _ok(rows)
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return _err(str(e), 500)
+
+
 @imsite_bp.route("/data", methods=["POST", "OPTIONS"])
 def imsite_data():
     if request.method == "OPTIONS":
