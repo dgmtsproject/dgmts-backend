@@ -12,8 +12,10 @@
 --   * purchase_requests actor columns (requested_by/supervisor_id/order_placed_by/
 --     received_by/approved_rejected_by) are TEXT (hold MS identifiers), as in prod.
 --   * RLS + get_user_role() removed (authorization is enforced in Flask).
---   * Excluded (belong to a separate app / unused): inventory_role_tab_permissions,
---     consumable_items, inventory_stock, consumption_logs, suppliers.
+--   * Excluded (unused leftover): inventory_role_tab_permissions.
+--   * Consumable Inventory tables (suppliers, consumable_items, inventory_stock,
+--     consumption_logs) are defined at the bottom of this file and in
+--     consumable_schema.sql for additive deploys.
 -- ======================================================================
 
 -- gen_random_uuid() is built into PostgreSQL core since v13 (this server is
@@ -222,3 +224,64 @@ INSERT INTO inventory.purchase_supervisor_job_titles (job_title_normalized, job_
     ('office hr manager', 'Office HR Manager'),
     ('office / hr manager', 'Office / HR Manager')
 ON CONFLICT (job_title_normalized) DO NOTHING;
+
+-- ---------- Consumable Inventory (separate app; same schema/role) ----------
+-- Additive copy also lives in consumable_schema.sql for existing servers.
+CREATE TABLE IF NOT EXISTS inventory.suppliers (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         TEXT NOT NULL UNIQUE,
+    contact_name TEXT,
+    email        TEXT,
+    phone        TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS inventory.consumable_items (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code             TEXT NOT NULL UNIQUE,
+    description      TEXT NOT NULL,
+    supplier_id      UUID NOT NULL REFERENCES inventory.suppliers(id),
+    expiration_date  DATE,
+    qr_code_data_url TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS inventory.inventory_stock (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    item_id    UUID NOT NULL REFERENCES inventory.consumable_items(id) ON DELETE CASCADE,
+    branch     TEXT NOT NULL CHECK (branch IN ('Chantilly', 'Hampton', 'Maryland', 'DC')),
+    quantity   INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (item_id, branch)
+);
+
+CREATE TABLE IF NOT EXISTS inventory.consumption_logs (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    item_id             UUID NOT NULL REFERENCES inventory.consumable_items(id) ON DELETE CASCADE,
+    employee_identifier TEXT NOT NULL,
+    quantity_consumed   INTEGER NOT NULL CHECK (quantity_consumed > 0),
+    branch              TEXT NOT NULL CHECK (branch IN ('Chantilly', 'Hampton', 'Maryland', 'DC')),
+    notes               TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_stock_item_branch
+    ON inventory.inventory_stock (item_id, branch);
+CREATE INDEX IF NOT EXISTS idx_consumption_logs_branch_created
+    ON inventory.consumption_logs (branch, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ms_directory_employees_employee_id
+    ON inventory.ms_directory_employees (employee_id);
+
+CREATE OR REPLACE FUNCTION inventory.handle_consumable_stock_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_inventory_stock_updated_at ON inventory.inventory_stock;
+CREATE TRIGGER trg_inventory_stock_updated_at
+    BEFORE UPDATE ON inventory.inventory_stock
+    FOR EACH ROW EXECUTE FUNCTION inventory.handle_consumable_stock_updated_at();

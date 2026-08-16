@@ -18,7 +18,11 @@ module is a one-line change in app.py (guarded by INVENTORY_MODULE_ENABLED).
 import hashlib
 import hmac
 import json
+import re
 import time
+import uuid
+from datetime import date, datetime, time as dt_time
+from decimal import Decimal
 
 import requests
 from flask import Blueprint, request, jsonify
@@ -59,6 +63,38 @@ def _update(table: str, values: dict, where_sql: str, where_params: list, return
     params = list(values.values()) + list(where_params)
     sql = f"UPDATE {table} SET {set_sql} WHERE {where_sql} RETURNING {returning}"
     return inventory_db.execute_one(sql, params)
+
+
+def _jsonable(obj):
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, dict):
+        return {k: _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(v) for v in obj]
+    if isinstance(obj, (datetime, date, dt_time)):
+        return obj.isoformat()
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    if isinstance(obj, Decimal):
+        return int(obj) if obj == obj.to_integral_value() else float(obj)
+    return str(obj)
+
+
+def _json_ok(data, status=200):
+    return jsonify(_jsonable(data)), status
+
+
+CONSUMABLE_BRANCHES = {"Chantilly", "Hampton", "Maryland", "DC"}
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.I,
+)
+
+
+def _valid_branch(value) -> str | None:
+    name = str(value or "").strip()
+    return name if name in CONSUMABLE_BRANCHES else None
 
 
 # --------------------------------------------------------------------------
@@ -290,6 +326,228 @@ def create_inventory_log():
         return jsonify({"error": "action is required"}), 400
     row = _insert("inventory_logs", values)
     return jsonify(row), 201
+
+
+# --------------------------------------------------------------------------
+# Consumable Inventory (suppliers / items / per-branch stock / consumption)
+# --------------------------------------------------------------------------
+@inventory_bp.route("/suppliers", methods=["GET"])
+@ms_auth_optional
+def list_suppliers():
+    rows = inventory_db.query("SELECT * FROM suppliers ORDER BY name")
+    return _json_ok(rows)
+
+
+@inventory_bp.route("/suppliers", methods=["POST"])
+@ms_auth_optional
+def create_supplier():
+    data = _json()
+    values = _pick(data, {"name", "contact_name", "email", "phone"})
+    name = (values.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    values["name"] = name
+    try:
+        row = _insert("suppliers", values)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"Could not create supplier: {e}"}), 400
+    return _json_ok(row, 201)
+
+
+@inventory_bp.route("/consumable-items", methods=["GET"])
+@ms_auth_optional
+def list_consumable_items():
+    code = (request.args.get("code") or "").strip()
+    where, params = "", []
+    if code:
+        where = "WHERE i.code = %s"
+        params = [code]
+    rows = inventory_db.query(
+        f"""
+        SELECT i.*,
+               CASE WHEN s.id IS NULL THEN NULL
+                    ELSE json_build_object(
+                        'id', s.id::text,
+                        'name', s.name,
+                        'contact_name', s.contact_name,
+                        'email', s.email,
+                        'phone', s.phone,
+                        'created_at', s.created_at
+                    )
+               END AS supplier
+        FROM consumable_items i
+        LEFT JOIN suppliers s ON s.id = i.supplier_id
+        {where}
+        ORDER BY i.created_at DESC
+        """,
+        params,
+    )
+    return _json_ok(rows)
+
+
+@inventory_bp.route("/consumable-items", methods=["POST"])
+@ms_auth_optional
+def create_consumable_item():
+    data = _json()
+    values = _pick(
+        data,
+        {"code", "description", "supplier_id", "expiration_date", "qr_code_data_url"},
+    )
+    code = (values.get("code") or "").strip()
+    description = (values.get("description") or "").strip()
+    supplier_id = values.get("supplier_id")
+    if not code or not description or not supplier_id:
+        return jsonify({"error": "code, description, and supplier_id are required"}), 400
+    values["code"] = code
+    values["description"] = description
+    if not values.get("expiration_date"):
+        values["expiration_date"] = None
+    try:
+        row = _insert("consumable_items", values)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"Could not create item: {e}"}), 400
+    return _json_ok(row, 201)
+
+
+@inventory_bp.route("/consumable-items/<item_id>", methods=["PATCH"])
+@ms_auth_optional
+def update_consumable_item(item_id):
+    data = _json()
+    incoming = _pick(
+        data,
+        {"code", "description", "supplier_id", "expiration_date", "qr_code_data_url"},
+    )
+    row = _update("consumable_items", incoming, "id = %s", [item_id])
+    if not row:
+        return jsonify({"error": "Item not found"}), 404
+    return _json_ok(row)
+
+
+@inventory_bp.route("/inventory-stock", methods=["GET"])
+@ms_auth_optional
+def list_inventory_stock():
+    item_id = (request.args.get("item_id") or "").strip()
+    branch = _valid_branch(request.args.get("branch"))
+    where, params = [], []
+    if item_id:
+        where.append("item_id = %s")
+        params.append(item_id)
+    if branch:
+        where.append("branch = %s")
+        params.append(branch)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    rows = inventory_db.query(
+        f"SELECT * FROM inventory_stock {where_sql} ORDER BY branch",
+        params,
+    )
+    return _json_ok(rows)
+
+
+@inventory_bp.route("/inventory-stock", methods=["PUT"])
+@ms_auth_optional
+def upsert_inventory_stock():
+    data = _json()
+    item_id = data.get("item_id")
+    branch = _valid_branch(data.get("branch"))
+    try:
+        quantity = int(data.get("quantity"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "quantity must be an integer"}), 400
+    if not item_id or not branch:
+        return jsonify({"error": "item_id and a valid branch are required"}), 400
+    if quantity < 0:
+        return jsonify({"error": "quantity cannot be negative"}), 400
+    row = inventory_db.execute_one(
+        """
+        INSERT INTO inventory_stock (item_id, branch, quantity)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (item_id, branch)
+        DO UPDATE SET quantity = EXCLUDED.quantity
+        RETURNING *
+        """,
+        [item_id, branch, quantity],
+    )
+    return _json_ok(row)
+
+
+@inventory_bp.route("/consumption-logs", methods=["GET"])
+@ms_auth_optional
+def list_consumption_logs():
+    branch = _valid_branch(request.args.get("branch"))
+    where, params = [], []
+    if branch:
+        where.append("cl.branch = %s")
+        params.append(branch)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    rows = inventory_db.query(
+        f"""
+        SELECT cl.*,
+               json_build_object('code', i.code, 'description', i.description) AS item
+        FROM consumption_logs cl
+        LEFT JOIN consumable_items i ON i.id = cl.item_id
+        {where_sql}
+        ORDER BY cl.created_at DESC
+        """,
+        params,
+    )
+    return _json_ok(rows)
+
+
+@inventory_bp.route("/consumption-logs", methods=["POST"])
+@ms_auth_optional
+def create_consumption_log():
+    data = _json()
+    item_id = data.get("item_id")
+    employee_identifier = str(data.get("employee_identifier") or "").strip()
+    branch = _valid_branch(data.get("branch"))
+    notes = data.get("notes") or None
+    try:
+        consumed = int(data.get("quantity_consumed"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "quantity_consumed must be an integer"}), 400
+    if not item_id or not employee_identifier or not branch or consumed <= 0:
+        return jsonify({
+            "error": "item_id, employee_identifier, branch, and quantity_consumed > 0 are required",
+        }), 400
+
+    try:
+        with inventory_db.cursor(commit=True) as cur:
+            cur.execute(
+                """
+                SELECT quantity FROM inventory_stock
+                WHERE item_id = %s AND branch = %s
+                FOR UPDATE
+                """,
+                [item_id, branch],
+            )
+            stock_row = cur.fetchone()
+            available = int(stock_row["quantity"]) if stock_row else 0
+            if available < consumed:
+                return jsonify({
+                    "error": f"Not enough quantity in {branch}. Available: {available}",
+                }), 400
+            cur.execute(
+                """
+                INSERT INTO inventory_stock (item_id, branch, quantity)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (item_id, branch)
+                DO UPDATE SET quantity = EXCLUDED.quantity
+                """,
+                [item_id, branch, available - consumed],
+            )
+            cur.execute(
+                """
+                INSERT INTO consumption_logs
+                    (item_id, employee_identifier, quantity_consumed, branch, notes)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                [item_id, employee_identifier, consumed, branch, notes],
+            )
+            log_row = cur.fetchone()
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"Could not record consumption: {e}"}), 400
+    return _json_ok(dict(log_row) if log_row else {}, 201)
 
 
 # --------------------------------------------------------------------------
@@ -536,6 +794,71 @@ def ms_directory_employees():
         f"SELECT * FROM ms_directory_employees {where} ORDER BY name", params
     )
     return jsonify(rows)
+
+
+@inventory_bp.route("/ms-directory/employees/lookup", methods=["GET"])
+def ms_directory_employee_lookup():
+    """Resolve a badge scan or typed ID to one employee. Public, like GET employees."""
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"error": "q is required"}), 400
+
+    id_candidate = q
+    email_candidate = q
+    try:
+        parsed = json.loads(q)
+        if isinstance(parsed, dict):
+            from_json = (
+                parsed.get("employee_id")
+                or parsed.get("user_id")
+                or parsed.get("id")
+                or parsed.get("ms_user_id")
+            )
+            if from_json is not None:
+                id_candidate = str(from_json)
+            if isinstance(parsed.get("email"), str):
+                email_candidate = parsed["email"]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    def _one(sql, params):
+        return inventory_db.query_one(sql, params)
+
+    for scanned_uuid in dict.fromkeys(m.lower() for m in _UUID_RE.findall(q)):
+        row = _one(
+            "SELECT * FROM ms_directory_employees WHERE qr_uuid = %s",
+            [scanned_uuid],
+        )
+        if row:
+            return _json_ok(row)
+
+    row = _one("SELECT * FROM ms_directory_employees WHERE qr_uuid = %s", [q])
+    if row:
+        return _json_ok(row)
+
+    row = _one(
+        "SELECT * FROM ms_directory_employees WHERE employee_id = %s",
+        [id_candidate],
+    )
+    if row:
+        return _json_ok(row)
+
+    if id_candidate.isdigit():
+        row = _one(
+            "SELECT * FROM ms_directory_employees WHERE ms_user_id = %s",
+            [int(id_candidate)],
+        )
+        if row:
+            return _json_ok(row)
+
+    row = _one(
+        "SELECT * FROM ms_directory_employees WHERE email = %s",
+        [email_candidate],
+    )
+    if row:
+        return _json_ok(row)
+
+    return jsonify({"error": "Employee not found"}), 404
 
 
 @inventory_bp.route("/ms-directory/departments", methods=["GET"])
