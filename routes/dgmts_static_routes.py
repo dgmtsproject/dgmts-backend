@@ -27,7 +27,7 @@ ALLOWED_TABLES = frozenset({
     'blogs', 'categories', 'news', 'events', 'subscribers', 'subscriber_groups',
     'subscriber_group_members', 'subscriber_newsletter_email_logs', 'email_config',
     'payments', 'payment_portal_users', 'dgmts_contact_persons', 'credentials',
-    'about_employees', 'email_outbox',
+    'about_employees', 'about_leaders', 'email_outbox',
 })
 
 ALLOWED_BUCKETS = frozenset({
@@ -60,7 +60,8 @@ def _format_select_columns(cols) -> str:
         if not p or p == '*':
             continue
         if '(' in p:
-            out.append(p)
+            # PostgREST embeds like categories(category_name) are not SQL.
+            continue
         else:
             out.append(_qident(p))
     return ', '.join(out) if out else '*'
@@ -132,7 +133,7 @@ def static_data():
                     if part == '*' or not part:
                         continue
                     if '(' in part:
-                        continue
+                        continue  # ignore PostgREST relationship embeds
                     _ident(part)
 
             select_sql = _format_select_columns(cols) if isinstance(cols, str) else '*'
