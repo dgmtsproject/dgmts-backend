@@ -137,7 +137,10 @@ def dgmts_static_send_mail():
         
         # BCC and admin emails
         bcc_emails = ["iaziz@dullesgeotechnical.com", "info@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com"]
-        payment_cc_emails = ["accounting@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com", "mhussaini@dullesgeotechnical.com"]
+        # noreply.dullesgeotechnical@gmail.com bcc'd temporarily so delivery can be
+        # tested/verified from the sending mailbox itself while dullesgeotechnical.com
+        # mail (M365) is being quarantined.
+        payment_cc_emails = ["accounting@dullesgeotechnical.com", "iaziz@dullesgeotechnical.com", "qhaider@dullesgeotechnical.com", "thamid@dullesgeotechnical.com", "mhussaini@dullesgeotechnical.com", "noreply.dullesgeotechnical@gmail.com"]
         
         # Function to send email with fallback
         def send_email_with_fallback(mail_options, config_to_use=None, _allow_fallback=True):
@@ -347,7 +350,10 @@ def dgmts_static_send_mail():
             processed_mail_options = {
                 'from': f"{from_email_name} <{active_config['email_id']}>",
                 'to': ['thamid@dullesgeotechnical.com', 'accounting@dullesgeotechnical.com'],
-                'bcc': ['iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com', 'mhussaini@dullesgeotechnical.com'],
+                # noreply.dullesgeotechnical@gmail.com bcc'd temporarily so delivery
+                # can be tested/verified from the sending mailbox itself while the
+                # dullesgeotechnical.com mail (M365) is being quarantined.
+                'bcc': ['iaziz@dullesgeotechnical.com', 'qhaider@dullesgeotechnical.com', 'mhussaini@dullesgeotechnical.com', 'noreply.dullesgeotechnical@gmail.com'],
                 'subject': f"💰 Payment Processed - Invoice #{invoice_no}",
                 'text': f'''
 PAYMENT PROCESSED
