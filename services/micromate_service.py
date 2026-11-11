@@ -194,7 +194,8 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=1440,
         'emails_sent': 0,
         'alert_timestamps': [],
         'skipped_timestamps': [],
-        'inactivity_alert_sent': False
+        'inactivity_alert_sent': False,
+        'no_data_alert_sent': False
     }
     try:
         instrument = find_micromate_instrument('UM15783')
@@ -267,7 +268,48 @@ def check_and_send_micromate_alert(custom_emails=None, time_window_minutes=1440,
             print("No UM15783 data received")
             log_alert_event("ERROR", "No UM15783 data received", 'Instantel 1')
             result_summary['error'] = "No UM15783 data received"
+
+            # Genuine zero-data outage (as opposed to data that merely went stale).
+            # The 1-hour inactivity check further below never runs in this branch —
+            # it needs at least one existing reading to measure staleness from — so
+            # without this, a total outage (device offline, FTP server down, etc.)
+            # never notifies anyone. Send once, then stay quiet until data resumes.
+            no_data_recipients = set(alert_emails + warning_emails + shutdown_emails)
+            no_data_recipients.add('dgmts.project@gmail.com')
+            already_sent_no_data = supabase.table('sent_alerts') \
+                .select('id') \
+                .eq('instrument_id', alert_instrument_id) \
+                .eq('alert_type', 'NO_DATA_FOUND') \
+                .execute()
+            if not already_sent_no_data.data:
+                subject = '🚨 Instantel 1 (UM15783) – No Data Found'
+                body = f'''
+                <p>No UM15783 (Instantel 1) readings were found at all in the last
+                {time_window_desc}.</p>
+                <p>This usually means the instrument has stopped uploading, or the
+                FTP service on the server is not receiving files from it.</p>
+                <p>Please check the instrument's power/connectivity and the
+                server's FTP service.</p>
+                '''
+                email_sent = send_email(','.join(no_data_recipients), subject, body)
+                if email_sent:
+                    supabase.table('sent_alerts').insert({
+                        'instrument_id': alert_instrument_id,
+                        'node_id': alert_node_id,
+                        'timestamp': to_date,
+                        'alert_type': 'NO_DATA_FOUND'
+                    }).execute()
+                    log_alert_event('EMAIL_SENT', 'No-data-found alert sent', 'Instantel 1')
+                    result_summary['no_data_alert_sent'] = True
             return result_summary
+        else:
+            # Data is present again — clear any standing "no data at all" alert so
+            # it can fire again if the instrument later goes fully silent again.
+            supabase.table('sent_alerts') \
+                .delete() \
+                .eq('instrument_id', alert_instrument_id) \
+                .eq('alert_type', 'NO_DATA_FOUND') \
+                .execute()
 
         alerts_by_timestamp = {}
 
@@ -571,7 +613,8 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440
         'emails_sent': 0,
         'alert_timestamps': [],
         'skipped_timestamps': [],
-        'inactivity_alert_sent': False
+        'inactivity_alert_sent': False,
+        'no_data_alert_sent': False
     }
 
     try:
@@ -653,12 +696,51 @@ def check_and_send_instantel2_alert(custom_emails=None, time_window_minutes=1440
             return result_summary
 
         um16368_readings = csv_result.get('readings') or []
-        
+
         if not um16368_readings:
             print("No UM16368 data received")
             log_alert_event("ERROR", "No UM16368 data received", 'Instantel 2')
             result_summary['error'] = "No UM16368 data received"
+
+            # Genuine zero-data outage (as opposed to data that merely went stale).
+            # The 1-hour inactivity check further below never runs in this branch —
+            # it needs at least one existing reading to measure staleness from — so
+            # without this, a total outage (device offline, FTP server down, etc.)
+            # never notifies anyone. Send once, then stay quiet until data resumes.
+            already_sent_no_data = supabase.table('sent_alerts') \
+                .select('id') \
+                .eq('instrument_id', alert_instrument_id) \
+                .eq('alert_type', 'NO_DATA_FOUND') \
+                .execute()
+            if not already_sent_no_data.data:
+                subject = '🚨 Instantel 2 (UM16368) – No Data Found'
+                body = f'''
+                <p>No UM16368 (Instantel 2) readings were found at all in the last
+                {time_window_desc}.</p>
+                <p>This usually means the instrument has stopped uploading, or the
+                FTP service on the server is not receiving files from it.</p>
+                <p>Please check the instrument's power/connectivity and the
+                server's FTP service.</p>
+                '''
+                email_sent = send_email(','.join(all_emails), subject, body)
+                if email_sent:
+                    supabase.table('sent_alerts').insert({
+                        'instrument_id': alert_instrument_id,
+                        'node_id': alert_node_id,
+                        'timestamp': to_date,
+                        'alert_type': 'NO_DATA_FOUND'
+                    }).execute()
+                    log_alert_event('EMAIL_SENT', 'No-data-found alert sent', 'Instantel 2')
+                    result_summary['no_data_alert_sent'] = True
             return result_summary
+        else:
+            # Data is present again — clear any standing "no data at all" alert so
+            # it can fire again if the instrument later goes fully silent again.
+            supabase.table('sent_alerts') \
+                .delete() \
+                .eq('instrument_id', alert_instrument_id) \
+                .eq('alert_type', 'NO_DATA_FOUND') \
+                .execute()
 
         # --------------------------------------------------
         # 4. NO DATA INACTIVITY CHECK (1 HOUR)

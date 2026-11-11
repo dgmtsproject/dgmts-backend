@@ -50,6 +50,15 @@ if Config.INVENTORY_MODULE_ENABLED:
     except Exception as _inv_err:  # noqa: BLE001
         print(f"[inventory] module DISABLED (failed to load): {_inv_err}")
 
+# Projects Directory module (isolated, additive) — same pattern as inventory.
+if Config.PROJECTS_MODULE_ENABLED:
+    try:
+        from routes.projects_routes import projects_bp
+        app.register_blueprint(projects_bp)
+        print("[projects] module enabled at /api/projects")
+    except Exception as _proj_err:  # noqa: BLE001
+        print(f"[projects] module DISABLED (failed to load): {_proj_err}")
+
 # Root route
 @app.route('/')
 def index():

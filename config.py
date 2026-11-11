@@ -156,6 +156,35 @@ class Config:
     INVENTORY_SMTP_PASSWORD = os.getenv('INVENTORY_SMTP_PASSWORD')
     INVENTORY_SMTP_FROM = os.getenv('INVENTORY_SMTP_FROM') or os.getenv('INVENTORY_SMTP_USERNAME')
 
+    # ------------------------------------------------------------------
+    # Projects Directory module (isolated, mirrors the inventory module).
+    # Lives in a dedicated `projects` schema of the same Postgres database,
+    # reached through its own role + pool. Routes: /api/projects/*
+    # ------------------------------------------------------------------
+    PROJECTS_MODULE_ENABLED = os.getenv('PROJECTS_MODULE_ENABLED', 'true').lower() == 'true'
+    PROJECTS_DB_HOST = os.getenv('PROJECTS_DB_HOST', os.getenv('STATIC_DB_HOST', '127.0.0.1'))
+    PROJECTS_DB_PORT = int(os.getenv('PROJECTS_DB_PORT', os.getenv('STATIC_DB_PORT', '5432')))
+    PROJECTS_DB_NAME = os.getenv('PROJECTS_DB_NAME', os.getenv('STATIC_DB_NAME', 'dgmts_static_db'))
+    PROJECTS_DB_USER = os.getenv('PROJECTS_DB_USER', 'dgmts_projects_user')
+    PROJECTS_DB_PASSWORD = os.getenv('PROJECTS_DB_PASSWORD')
+    PROJECTS_DB_SCHEMA = os.getenv('PROJECTS_DB_SCHEMA', 'projects')
+
+    # Company login API used to validate the frontend bearer (GET {base}/user/me).
+    PROJECTS_MS_API_BASE_URL = os.getenv(
+        'PROJECTS_MS_API_BASE_URL',
+        os.getenv('INVENTORY_MS_API_BASE_URL', 'https://ms.dullesgeotechnical.com/api/v2'),
+    )
+
+    # Always-admin emails for the Projects app (full access + Access page).
+    PROJECTS_ADMIN_EMAILS = [
+        e.strip().lower()
+        for e in os.getenv(
+            'PROJECTS_ADMIN_EMAILS',
+            'dgmts.project@gmail.com,iaziz@dullesgeotechnical.com,qhaider@dullesgeotechnical.com',
+        ).split(',')
+        if e.strip()
+    ]
+
     # Reset tokens storage (in production, use Redis or database)
     RESET_TOKENS = {}
     
