@@ -13,10 +13,11 @@ from datetime import date, datetime, time as dt_time
 from decimal import Decimal
 
 import requests
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from config import Config
 from models.projects_db import projects_db
+from projects import superuser
 from projects.ms_auth import FLAGS, access_required, is_admin_email
 
 projects_bp = Blueprint("projects", __name__, url_prefix="/api/projects")
@@ -76,6 +77,25 @@ def health():
 
 
 # --------------------------------------------------------------------------
+# Temporary super-user sign-in (see projects/superuser.py). Returns 404 unless
+# it is configured in .env, so it can be switched off by removing the settings.
+# --------------------------------------------------------------------------
+@projects_bp.route("/superuser/login", methods=["POST"])
+def superuser_login():
+    if not superuser.enabled():
+        return jsonify({"error": "Not available."}), 404
+    ip = (request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0]).strip()
+    if superuser.too_many_attempts(ip):
+        return jsonify({"error": "Too many attempts. Try again in a few minutes."}), 429
+    b = _json()
+    if not superuser.check_credentials(str(b.get("username") or ""), str(b.get("password") or "")):
+        superuser.record_attempt(ip)
+        return jsonify({"error": "Wrong username or password."}), 401
+    token, ttl = superuser.issue_token()
+    return _ok({"token": token, "expires_in": ttl})
+
+
+# --------------------------------------------------------------------------
 # Who am I + what may I do
 # --------------------------------------------------------------------------
 @projects_bp.route("/me", methods=["GET"])
@@ -87,6 +107,7 @@ def me():
         "email": u["email"],
         "name": u["full_name"] or u["email"],
         "job_title": u["job_title_name"],
+        "superuser": bool(u.get("superuser")),
         "access": request.projects_access,
     })
 
@@ -211,6 +232,19 @@ def chat_data():
 def list_access():
     """Every company employee merged with their saved access flags."""
     employees = []
+    if request.projects_user.get("superuser"):
+        # The employee directory needs a company login token, which the super user doesn't have.
+        saved_rows = projects_db.query("SELECT * FROM user_access ORDER BY name")
+        return _ok({
+            "people": [{
+                "userId": r["employee_user_id"], "email": r.get("email") or "",
+                "name": r.get("name") or r.get("email") or r["employee_user_id"],
+                "jobTitle": r.get("job_title") or "", "bootstrapAdmin": is_admin_email(r.get("email")),
+                **{f: bool(r.get(f)) for f in FLAGS},
+            } for r in saved_rows],
+            "loadedEmployees": 0,
+            "directoryAvailable": False,
+        })
     try:
         resp = requests.get(
             f"{Config.PROJECTS_MS_API_BASE_URL.rstrip('/')}/employee-list",
@@ -249,7 +283,7 @@ def list_access():
             **{f: bool(r.get(f)) for f in FLAGS},
         })
     people.sort(key=lambda x: x["name"].lower())
-    return _ok({"people": people, "loadedEmployees": len(employees)})
+    return _ok({"people": people, "loadedEmployees": len(employees), "directoryAvailable": bool(employees)})
 
 
 @projects_bp.route("/access", methods=["PUT"])
@@ -283,3 +317,43 @@ def upsert_access():
         ],
     )
     return _ok({"ok": True})
+
+
+# --------------------------------------------------------------------------
+# Chatbot pass-through. The browser runs the chat logic (tools, loop) but must
+# never hold the Anthropic key: it posts the usual Messages API body here and we
+# forward it with the key added server-side. Only the configured model and a
+# capped max_tokens are allowed, so the endpoint can't be used as a free proxy.
+# --------------------------------------------------------------------------
+@projects_bp.route("/chat/v1/messages", methods=["POST"])
+@access_required("can_chat")
+def chat_messages():
+    key = Config.PROJECTS_ANTHROPIC_API_KEY
+    if not key:
+        return jsonify({"error": "Chat is not configured on the server."}), 500
+    body = _json()
+    if not isinstance(body.get("messages"), list) or not body["messages"]:
+        return jsonify({"error": "messages is required."}), 400
+    allowed = {"system", "tools", "messages", "stream", "temperature"}
+    payload = {k: v for k, v in body.items() if k in allowed}
+    payload["model"] = Config.PROJECTS_CHAT_MODEL
+    payload["max_tokens"] = min(int(body.get("max_tokens") or Config.PROJECTS_CHAT_MAX_TOKENS),
+                                Config.PROJECTS_CHAT_MAX_TOKENS)
+    stream = bool(payload.get("stream"))
+    try:
+        upstream = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            json=payload,
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            stream=stream,
+            timeout=(10, 180),
+        )
+    except requests.RequestException as e:
+        return jsonify({"error": f"Could not reach the AI service: {e}"}), 502
+    headers = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+    ctype = upstream.headers.get("content-type", "application/json")
+    if stream:
+        return Response(upstream.iter_content(chunk_size=None), status=upstream.status_code,
+                        content_type=ctype, headers=headers)
+    return Response(upstream.content, status=upstream.status_code, content_type=ctype, headers=headers)

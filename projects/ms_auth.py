@@ -22,6 +22,7 @@ from flask import jsonify, request
 
 from config import Config
 from models.projects_db import projects_db
+from projects import superuser
 
 FLAGS = ("can_dashboard", "can_projects", "can_chat", "can_edit", "is_admin")
 
@@ -88,6 +89,8 @@ def is_admin_email(email: str | None) -> bool:
 
 def load_access(profile: dict) -> dict:
     """Access flags for a validated profile. Admin emails get everything."""
+    if profile.get("superuser"):
+        return {f: True for f in FLAGS}
     if is_admin_email(profile.get("email")):
         return {f: True for f in FLAGS}
     row = projects_db.query_one(
@@ -113,7 +116,7 @@ def access_required(flag: str | None = None):
             token = _extract_bearer()
             if not token:
                 return jsonify({"error": "Missing or invalid Authorization header"}), 401
-            profile = validate_ms_token(token)
+            profile = superuser.verify_token(token) if token.startswith(superuser.PREFIX) else validate_ms_token(token)
             if not profile:
                 return jsonify({"error": "Invalid or expired token"}), 401
             try:

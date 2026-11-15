@@ -185,6 +185,20 @@ class Config:
         if e.strip()
     ]
 
+    # Temporary "super user" sign-in for the Projects app, used only while the
+    # company login cannot yet return to the app. Disabled unless ALL THREE of
+    # username/hash/secret are set. Remove them from .env to switch it off.
+    PROJECTS_SUPERUSER_USERNAME = os.getenv('PROJECTS_SUPERUSER_USERNAME', 'superuser')
+    PROJECTS_SUPERUSER_PASSWORD_HASH = os.getenv('PROJECTS_SUPERUSER_PASSWORD_HASH')
+    PROJECTS_SUPERUSER_SECRET = os.getenv('PROJECTS_SUPERUSER_SECRET')
+    PROJECTS_SUPERUSER_HOURS = int(os.getenv('PROJECTS_SUPERUSER_HOURS', '8'))
+
+    # Projects chatbot: the Anthropic key stays here; the frontend only talks to
+    # the /api/projects/chat/v1/messages pass-through (needs the Chat permission).
+    PROJECTS_ANTHROPIC_API_KEY = os.getenv('PROJECTS_ANTHROPIC_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+    PROJECTS_CHAT_MODEL = os.getenv('PROJECTS_CHAT_MODEL', 'claude-sonnet-5-5')
+    PROJECTS_CHAT_MAX_TOKENS = int(os.getenv('PROJECTS_CHAT_MAX_TOKENS', '4096'))
+
     # Reset tokens storage (in production, use Redis or database)
     RESET_TOKENS = {}
     
