@@ -173,3 +173,18 @@ CREATE TABLE IF NOT EXISTS projects.user_access (
     updated_by       TEXT,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ---------- Company employee directory (cache) ----------
+-- Lets the super user see and pick employees without a company-login token.
+-- Seeded once from an employee export and refreshed automatically whenever a
+-- company user signs in (see routes/projects_routes.py).
+CREATE TABLE IF NOT EXISTS projects.employee_directory (
+    user_id     TEXT PRIMARY KEY,
+    name        TEXT,
+    email       TEXT,
+    job_title   TEXT,
+    department  TEXT,
+    active      BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_employee_directory_email ON projects.employee_directory (lower(email));

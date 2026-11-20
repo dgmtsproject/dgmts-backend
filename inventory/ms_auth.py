@@ -17,6 +17,7 @@ import requests
 from flask import request, jsonify
 
 from config import Config
+from inventory import superuser
 
 
 # Tiny in-process cache so we don't hit /user/me on every single API call.
@@ -76,6 +77,9 @@ def _shape_profile(raw: dict) -> dict:
 
 def validate_ms_token(token: str) -> dict | None:
     """Return a normalized profile for a valid token, else None."""
+    if token.startswith(superuser.PREFIX):
+        return superuser.verify_token(token)
+
     now = time.time()
     cached = _PROFILE_CACHE.get(token)
     if cached and cached[0] > now:

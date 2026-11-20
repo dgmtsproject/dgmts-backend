@@ -243,8 +243,10 @@ CREATE TABLE IF NOT EXISTS inventory.consumable_items (
     supplier_id      UUID NOT NULL REFERENCES inventory.suppliers(id),
     expiration_date  DATE,
     qr_code_data_url TEXT,
+    min_qty          INTEGER NOT NULL DEFAULT 0 CHECK (min_qty >= 0),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Existing databases: see inventory_migration_min_qty.sql (the API also adds it on first use).
 
 CREATE TABLE IF NOT EXISTS inventory.inventory_stock (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),

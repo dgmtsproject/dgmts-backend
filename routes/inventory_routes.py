@@ -29,8 +29,9 @@ from flask import Blueprint, request, jsonify
 
 from config import Config
 from models.inventory_db import inventory_db
-from inventory.ms_auth import ms_auth_optional, _normalize_email
+from inventory.ms_auth import ms_auth_optional, ms_admin_required, _normalize_email
 from services.inventory.email import send_inventory_email
+from services.inventory import consumable_alerts
 
 inventory_bp = Blueprint("inventory", __name__, url_prefix="/api/inventory")
 
@@ -354,9 +355,55 @@ def create_supplier():
     return _json_ok(row, 201)
 
 
+_MIN_QTY_READY = False
+_MIN_QTY_NEXT_TRY = 0.0
+
+
+def _min_qty_column_ready() -> bool:
+    """True when consumable_items.min_qty exists. Adds it on first use if the DB
+    user may; otherwise the feature stays off and everything else works as before."""
+    global _MIN_QTY_READY, _MIN_QTY_NEXT_TRY
+    if _MIN_QTY_READY:
+        return True
+    if time.time() < _MIN_QTY_NEXT_TRY:
+        return False
+    check = (
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'consumable_items' "
+        "AND column_name = 'min_qty'"
+    )
+    try:
+        if not inventory_db.query_one(check):
+            inventory_db.execute(
+                "ALTER TABLE consumable_items ADD COLUMN IF NOT EXISTS "
+                "min_qty INTEGER NOT NULL DEFAULT 0 CHECK (min_qty >= 0)"
+            )
+        _MIN_QTY_READY = bool(inventory_db.query_one(check))
+    except Exception as e:  # noqa: BLE001
+        print(f"[inventory] min_qty column unavailable: {e}")
+        _MIN_QTY_READY = False
+    if not _MIN_QTY_READY:
+        _MIN_QTY_NEXT_TRY = time.time() + 300
+    return _MIN_QTY_READY
+
+
+def _parse_min_qty(raw):
+    """(value, error). Blank -> 0."""
+    if raw is None or str(raw).strip() == "":
+        return 0, None
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return None, "min_qty must be a whole number"
+    if v < 0:
+        return None, "min_qty cannot be negative"
+    return v, None
+
+
 @inventory_bp.route("/consumable-items", methods=["GET"])
 @ms_auth_optional
 def list_consumable_items():
+    _min_qty_column_ready()
     code = (request.args.get("code") or "").strip()
     where, params = "", []
     if code:
@@ -402,6 +449,12 @@ def create_consumable_item():
     values["description"] = description
     if not values.get("expiration_date"):
         values["expiration_date"] = None
+    if "min_qty" in data:
+        min_qty, err = _parse_min_qty(data.get("min_qty"))
+        if err:
+            return jsonify({"error": err}), 400
+        if _min_qty_column_ready():
+            values["min_qty"] = min_qty
     try:
         row = _insert("consumable_items", values)
     except Exception as e:  # noqa: BLE001
@@ -417,6 +470,12 @@ def update_consumable_item(item_id):
         data,
         {"code", "description", "supplier_id", "expiration_date", "qr_code_data_url"},
     )
+    if "min_qty" in data:
+        min_qty, err = _parse_min_qty(data.get("min_qty"))
+        if err:
+            return jsonify({"error": err}), 400
+        if _min_qty_column_ready():
+            incoming["min_qty"] = min_qty
     row = _update("consumable_items", incoming, "id = %s", [item_id])
     if not row:
         return jsonify({"error": "Item not found"}), 404
@@ -457,6 +516,11 @@ def upsert_inventory_stock():
         return jsonify({"error": "item_id and a valid branch are required"}), 400
     if quantity < 0:
         return jsonify({"error": "quantity cannot be negative"}), 400
+    prev = inventory_db.query_one(
+        "SELECT quantity FROM inventory_stock WHERE item_id = %s AND branch = %s",
+        [item_id, branch],
+    )
+    prev_qty = int(prev["quantity"]) if prev else None
     row = inventory_db.execute_one(
         """
         INSERT INTO inventory_stock (item_id, branch, quantity)
@@ -467,6 +531,8 @@ def upsert_inventory_stock():
         """,
         [item_id, branch, quantity],
     )
+    if _min_qty_column_ready():
+        consumable_alerts.check_and_notify(item_id, branch, prev_qty, quantity)
     return _json_ok(row)
 
 
@@ -547,6 +613,8 @@ def create_consumption_log():
             log_row = cur.fetchone()
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"Could not record consumption: {e}"}), 400
+    if _min_qty_column_ready():
+        consumable_alerts.check_and_notify(item_id, branch, available, available - consumed)
     return _json_ok(dict(log_row) if log_row else {}, 201)
 
 
@@ -627,7 +695,7 @@ def update_purchase_request(po_number):
 
 
 @inventory_bp.route("/purchase-requests/<po_number>", methods=["DELETE"])
-@ms_auth_optional
+@ms_admin_required
 def delete_purchase_request(po_number):
     n = inventory_db.execute(
         "DELETE FROM purchase_requests WHERE po_number = %s", [po_number]
@@ -1029,3 +1097,13 @@ def send_email_endpoint():
     if not ok:
         return jsonify({"error": err}), 502
     return jsonify({"success": True})
+
+
+# [workflow-routes] PO workflow endpoints (email links / notifications). Attached
+# defensively: if this import ever fails, the rest of the inventory API keeps
+# working and only these new endpoints are missing.
+try:
+    from routes.inventory_workflow_routes import register_workflow_routes
+    register_workflow_routes(inventory_bp)
+except Exception as _wf_err:  # noqa: BLE001
+    print(f"[inventory] PO workflow endpoints DISABLED: {_wf_err}")

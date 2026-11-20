@@ -87,20 +87,34 @@ def is_admin_email(email: str | None) -> bool:
     return _normalize_email(email) in set(Config.PROJECTS_ADMIN_EMAILS)
 
 
+def _all(**over):
+    base = {f: False for f in FLAGS}
+    base.update(over)
+    return base
+
+
 def load_access(profile: dict) -> dict:
-    """Access flags for a validated profile. Admin emails get everything."""
+    """Access flags for a validated profile.
+
+    - Super user: everything (the only person who can edit projects or open the Access page).
+    - Always-admin company emails: Dashboard, Projects and Chat (view only).
+    - Everyone else: the Dashboard / Projects / Chat flags saved for them. Edit and
+      Admin can never come from the table, even if an old row has them set.
+    """
     if profile.get("superuser"):
         return {f: True for f in FLAGS}
     if is_admin_email(profile.get("email")):
-        return {f: True for f in FLAGS}
+        return _all(can_dashboard=True, can_projects=True, can_chat=True)
     row = projects_db.query_one(
-        "SELECT " + ", ".join(FLAGS) + " FROM user_access WHERE employee_user_id = %s",
-        [profile["user_id"]],
+        "SELECT can_dashboard, can_projects, can_chat FROM user_access "
+        "WHERE employee_user_id = %s OR (email IS NOT NULL AND lower(email) = %s) "
+        "ORDER BY (employee_user_id = %s) DESC LIMIT 1",
+        [profile["user_id"], profile.get("email_normalized", ""), profile["user_id"]],
     )
-    access = {f: bool(row and row.get(f)) for f in FLAGS}
-    if access["is_admin"]:
-        return {f: True for f in FLAGS}
-    return access
+    if not row:
+        return _all()
+    return _all(can_dashboard=bool(row["can_dashboard"]), can_projects=bool(row["can_projects"]),
+                can_chat=bool(row["can_chat"]))
 
 
 def access_required(flag: str | None = None):

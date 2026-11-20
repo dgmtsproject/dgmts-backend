@@ -8,6 +8,8 @@ company-login bearer token plus a per-person access flag.
 Disabling the module is a one-line change in app.py (PROJECTS_MODULE_ENABLED).
 """
 
+import threading
+import time
 import uuid
 from datetime import date, datetime, time as dt_time
 from decimal import Decimal
@@ -102,6 +104,8 @@ def superuser_login():
 @access_required()
 def me():
     u = request.projects_user
+    if not u.get("superuser"):
+        _maybe_refresh_directory(request.projects_bearer)
     return _ok({
         "user_id": u["user_id"],
         "email": u["email"],
@@ -225,98 +229,142 @@ def chat_data():
 
 
 # --------------------------------------------------------------------------
-# Access management (admins only)
+# Access management (super user only). Only Dashboard / Projects / Chat can be
+# granted here; editing projects and this page belong to the super user alone.
 # --------------------------------------------------------------------------
+GRANTABLE = ("can_dashboard", "can_projects", "can_chat")
+
+
 @projects_bp.route("/access", methods=["GET"])
 @access_required("is_admin")
 def list_access():
-    """Every company employee merged with their saved access flags."""
-    employees = []
-    if request.projects_user.get("superuser"):
-        # The employee directory needs a company login token, which the super user doesn't have.
-        saved_rows = projects_db.query("SELECT * FROM user_access ORDER BY name")
-        return _ok({
-            "people": [{
-                "userId": r["employee_user_id"], "email": r.get("email") or "",
-                "name": r.get("name") or r.get("email") or r["employee_user_id"],
-                "jobTitle": r.get("job_title") or "", "bootstrapAdmin": is_admin_email(r.get("email")),
-                **{f: bool(r.get(f)) for f in FLAGS},
-            } for r in saved_rows],
-            "loadedEmployees": 0,
-            "directoryAvailable": False,
-        })
-    try:
-        resp = requests.get(
-            f"{Config.PROJECTS_MS_API_BASE_URL.rstrip('/')}/employee-list",
-            params={"per_page": 1000},
-            headers={"Authorization": f"Bearer {request.projects_bearer}", "Accept": "application/json"},
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            body = resp.json()
-            raw = body if isinstance(body, list) else (body.get("data") or [])
-            for e in raw:
-                if not isinstance(e, dict):
-                    continue
-                uid = str(e.get("user_id") or e.get("id") or e.get("employee_id") or "").strip()
-                email = str(e.get("email") or e.get("mail") or "").strip().lower()
-                if uid and email:
-                    employees.append({
-                        "userId": uid,
-                        "email": email,
-                        "name": str(e.get("name") or e.get("full_name") or e.get("employee_name") or "").strip(),
-                        "jobTitle": str(e.get("job_title_name") or e.get("job_title") or "").strip(),
-                    })
-    except (requests.RequestException, ValueError):
-        pass
-
-    saved = {
-        r["employee_user_id"]: r
-        for r in projects_db.query("SELECT * FROM user_access")
-    }
-    people = []
-    for e in employees:
-        r = saved.get(e["userId"]) or {}
+    """Employee directory merged with the saved access flags."""
+    saved = {r["employee_user_id"]: r for r in projects_db.query("SELECT * FROM user_access")}
+    directory = projects_db.query(
+        "SELECT user_id, name, email, job_title, department, active, updated_at "
+        "FROM employee_directory ORDER BY lower(name)")
+    people, seen = [], set()
+    for e in directory:
+        r = saved.get(e["user_id"]) or {}
+        seen.add(e["user_id"])
         people.append({
-            **e,
-            "bootstrapAdmin": is_admin_email(e["email"]),
-            **{f: bool(r.get(f)) for f in FLAGS},
+            "userId": e["user_id"], "name": e["name"] or e["email"] or e["user_id"],
+            "email": e["email"] or "", "jobTitle": e["job_title"] or "",
+            "department": e["department"] or "", "active": e["active"],
+            **{f: bool(r.get(f)) for f in GRANTABLE},
         })
-    people.sort(key=lambda x: x["name"].lower())
-    return _ok({"people": people, "loadedEmployees": len(employees), "directoryAvailable": bool(employees)})
+    for uid, r in saved.items():  # people with a saved row who are not in the directory
+        if uid in seen:
+            continue
+        people.append({
+            "userId": uid, "name": r.get("name") or r.get("email") or uid, "email": r.get("email") or "",
+            "jobTitle": r.get("job_title") or "", "department": "", "active": True,
+            **{f: bool(r.get(f)) for f in GRANTABLE},
+        })
+    people.sort(key=lambda x: (x["name"] or "").lower())
+    updated = max((e["updated_at"] for e in directory), default=None)
+    return _ok({"people": people, "directoryUpdatedAt": updated, "directoryCount": len(directory)})
+
+
+def _save_access(changes: list[dict], by: str) -> int:
+    n = 0
+    with projects_db.cursor() as cur:
+        for b in changes:
+            user_id = str(b.get("userId") or "").strip()
+            if not user_id:
+                continue
+            flags = {f: bool(b.get(f)) for f in GRANTABLE}
+            cur.execute(
+                """
+                INSERT INTO user_access (employee_user_id, email, name, job_title,
+                                         can_dashboard, can_projects, can_chat, can_edit, is_admin,
+                                         updated_by, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, FALSE, FALSE, %s, now())
+                ON CONFLICT (employee_user_id) DO UPDATE SET
+                    email = EXCLUDED.email, name = EXCLUDED.name, job_title = EXCLUDED.job_title,
+                    can_dashboard = EXCLUDED.can_dashboard, can_projects = EXCLUDED.can_projects,
+                    can_chat = EXCLUDED.can_chat, can_edit = FALSE, is_admin = FALSE,
+                    updated_by = EXCLUDED.updated_by, updated_at = now()
+                """,
+                [user_id, str(b.get("email") or "").strip().lower() or None,
+                 str(b.get("name") or "").strip() or None, str(b.get("jobTitle") or "").strip() or None,
+                 flags["can_dashboard"], flags["can_projects"], flags["can_chat"], by],
+            )
+            n += 1
+    return n
 
 
 @projects_bp.route("/access", methods=["PUT"])
 @access_required("is_admin")
 def upsert_access():
+    """Save several people's flags in one transaction: {"changes": [{userId, ...flags}]}."""
     b = _json()
-    user_id = str(b.get("userId") or "").strip()
-    if not user_id:
-        return jsonify({"error": "userId is required."}), 400
-    flags = {f: bool(b.get(f)) for f in FLAGS}
-    projects_db.execute(
-        """
-        INSERT INTO user_access (employee_user_id, email, name, job_title,
-                                 can_dashboard, can_projects, can_chat, can_edit, is_admin,
-                                 updated_by, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-        ON CONFLICT (employee_user_id) DO UPDATE SET
-            email = EXCLUDED.email, name = EXCLUDED.name, job_title = EXCLUDED.job_title,
-            can_dashboard = EXCLUDED.can_dashboard, can_projects = EXCLUDED.can_projects,
-            can_chat = EXCLUDED.can_chat, can_edit = EXCLUDED.can_edit,
-            is_admin = EXCLUDED.is_admin, updated_by = EXCLUDED.updated_by, updated_at = now()
-        """,
-        [
-            user_id,
-            str(b.get("email") or "").strip().lower() or None,
-            str(b.get("name") or "").strip() or None,
-            str(b.get("jobTitle") or "").strip() or None,
-            flags["can_dashboard"], flags["can_projects"], flags["can_chat"],
-            flags["can_edit"], flags["is_admin"],
-            request.projects_user["email"],
-        ],
-    )
-    return _ok({"ok": True})
+    changes = b.get("changes")
+    if changes is None:  # a single person, for simple callers
+        changes = [b]
+    if not isinstance(changes, list) or not changes:
+        return jsonify({"error": "Nothing to save."}), 400
+    saved = _save_access(changes, request.projects_user["email"])
+    return _ok({"ok": True, "saved": saved})
+
+
+# --------------------------------------------------------------------------
+# Employee directory refresh: whenever a real company user signs in and the
+# cache is old, copy the company employee list into employee_directory. This
+# keeps the super user's Access page current without a company token.
+# --------------------------------------------------------------------------
+_DIRECTORY_MAX_AGE = 24 * 3600
+_directory_lock = threading.Lock()
+_directory_checked_at = 0.0
+
+
+def _refresh_directory(bearer: str) -> None:
+    try:
+        resp = requests.get(
+            f"{Config.PROJECTS_MS_API_BASE_URL.rstrip('/')}/employee-list",
+            params={"per_page": 1000},
+            headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json"},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return
+        body = resp.json()
+        raw = body if isinstance(body, list) else (body.get("data") or [])
+        rows = []
+        for e in raw:
+            if not isinstance(e, dict):
+                continue
+            uid = str(e.get("user_id") or e.get("id") or e.get("employee_id") or "").strip()
+            email = str(e.get("email") or e.get("mail") or "").strip().lower()
+            if uid and email:
+                rows.append((uid, str(e.get("name") or e.get("full_name") or "").strip() or None, email,
+                             str(e.get("job_title_name") or e.get("job_title") or "").strip() or None,
+                             str(e.get("department_name") or "").strip() or None,
+                             str(e.get("status", 1)) not in ("0", "false", "False")))
+        if not rows:
+            return
+        with projects_db.cursor() as cur:
+            for r in rows:
+                cur.execute(
+                    """
+                    INSERT INTO employee_directory (user_id, name, email, job_title, department, active, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, now())
+                    ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email,
+                        job_title = EXCLUDED.job_title, department = EXCLUDED.department,
+                        active = EXCLUDED.active, updated_at = now()
+                    """, r)
+    except Exception:  # noqa: BLE001  (best effort; never affects the request)
+        pass
+
+
+def _maybe_refresh_directory(bearer: str) -> None:
+    global _directory_checked_at
+    now = time.time()
+    with _directory_lock:
+        if now - _directory_checked_at < _DIRECTORY_MAX_AGE:
+            return
+        _directory_checked_at = now
+    threading.Thread(target=_refresh_directory, args=(bearer,), daemon=True).start()
 
 
 # --------------------------------------------------------------------------

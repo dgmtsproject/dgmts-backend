@@ -148,6 +148,20 @@ class Config:
         'INVENTORY_APP_PUBLIC_BASE', 'https://dgmts-imsite.dullesgeotechnical.com'
     )
 
+    # Public origin of THIS backend; used for approve/reject/order-placed links
+    # inside PO emails (those links now hit the backend directly).
+    INVENTORY_API_PUBLIC_BASE = os.getenv(
+        'INVENTORY_API_PUBLIC_BASE', 'https://imsite.dullesgeotechnical.com'
+    )
+
+    # Optional comma-separated override for the accounts "order placed" recipients.
+    ORDER_PLACED_NOTIFY_EMAILS = os.getenv('ORDER_PLACED_NOTIFY_EMAILS', '')
+    # Consumable Inventory: who is emailed when an item reaches its minimum quantity.
+    INVENTORY_LOW_STOCK_NOTIFY_EMAILS = os.getenv(
+        'INVENTORY_LOW_STOCK_NOTIFY_EMAILS',
+        'iaziz@dullesgeotechnical.com,qhaider@dullesgeotechnical.com',
+    )
+
     # Inventory SMTP (custom mail system) — isolated from the module above.
     INVENTORY_SMTP_HOST = os.getenv('INVENTORY_SMTP_HOST')
     INVENTORY_SMTP_PORT = int(os.getenv('INVENTORY_SMTP_PORT', '465'))
@@ -192,6 +206,15 @@ class Config:
     PROJECTS_SUPERUSER_PASSWORD_HASH = os.getenv('PROJECTS_SUPERUSER_PASSWORD_HASH')
     PROJECTS_SUPERUSER_SECRET = os.getenv('PROJECTS_SUPERUSER_SECRET')
     PROJECTS_SUPERUSER_HOURS = int(os.getenv('PROJECTS_SUPERUSER_HOURS', '8'))
+
+    # Temporary super-user sign-in for the Inventory module (see inventory/superuser.py).
+    # Disabled unless BOTH the hash and the secret are set. Acts as INVENTORY_SUPERUSER_EMAIL,
+    # which should be one of INVENTORY_ADMIN_EMAILS.
+    INVENTORY_SUPERUSER_USERNAME = os.getenv('INVENTORY_SUPERUSER_USERNAME', 'superuser')
+    INVENTORY_SUPERUSER_PASSWORD_HASH = os.getenv('INVENTORY_SUPERUSER_PASSWORD_HASH')
+    INVENTORY_SUPERUSER_SECRET = os.getenv('INVENTORY_SUPERUSER_SECRET')
+    INVENTORY_SUPERUSER_HOURS = int(os.getenv('INVENTORY_SUPERUSER_HOURS', '8'))
+    INVENTORY_SUPERUSER_EMAIL = os.getenv('INVENTORY_SUPERUSER_EMAIL', 'admin@gmail.com')
 
     # Projects chatbot: the Anthropic key stays here; the frontend only talks to
     # the /api/projects/chat/v1/messages pass-through (needs the Chat permission).
