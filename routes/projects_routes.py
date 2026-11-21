@@ -368,6 +368,106 @@ def _maybe_refresh_directory(bearer: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# Saved chat conversations. Each person sees only their own (owner = their
+# company user id; the temporary super user shares the id "superuser").
+# --------------------------------------------------------------------------
+MAX_MESSAGE_CHARS = 60000
+
+
+def _owner() -> str:
+    return request.projects_user["user_id"]
+
+
+def _own_chat(chat_id: str):
+    try:
+        uuid.UUID(chat_id)
+    except ValueError:
+        return None
+    return projects_db.query_one(
+        "SELECT id, title, created_at, updated_at FROM chat_conversations WHERE id = %s AND owner_id = %s",
+        [chat_id, _owner()])
+
+
+@projects_bp.route("/chats", methods=["GET"])
+@access_required("can_chat")
+def list_chats():
+    return _ok(projects_db.query(
+        "SELECT id, title, updated_at FROM chat_conversations WHERE owner_id = %s "
+        "ORDER BY updated_at DESC LIMIT 200", [_owner()]))
+
+
+@projects_bp.route("/chats", methods=["POST"])
+@access_required("can_chat")
+def create_chat():
+    title = str(_json().get("title") or "").strip()[:80] or "New chat"
+    row = projects_db.execute_one(
+        "INSERT INTO chat_conversations (owner_id, title) VALUES (%s, %s) RETURNING id, title, updated_at",
+        [_owner(), title])
+    return _ok(row, 201)
+
+
+@projects_bp.route("/chats/<chat_id>", methods=["GET"])
+@access_required("can_chat")
+def get_chat(chat_id):
+    chat = _own_chat(chat_id)
+    if not chat:
+        return jsonify({"error": "Conversation not found."}), 404
+    chat["messages"] = projects_db.query(
+        "SELECT role, content, created_at FROM chat_messages WHERE conversation_id = %s ORDER BY id", [chat_id])
+    return _ok(chat)
+
+
+@projects_bp.route("/chats/<chat_id>", methods=["PATCH"])
+@access_required("can_chat")
+def rename_chat(chat_id):
+    title = str(_json().get("title") or "").strip()[:80]
+    if not title:
+        return jsonify({"error": "title is required."}), 400
+    if not _own_chat(chat_id):
+        return jsonify({"error": "Conversation not found."}), 404
+    projects_db.execute("UPDATE chat_conversations SET title = %s WHERE id = %s", [title, chat_id])
+    return _ok({"ok": True})
+
+
+@projects_bp.route("/chats/<chat_id>", methods=["DELETE"])
+@access_required("can_chat")
+def delete_chat(chat_id):
+    if not _own_chat(chat_id):
+        return jsonify({"error": "Conversation not found."}), 404
+    projects_db.execute("DELETE FROM chat_conversations WHERE id = %s", [chat_id])
+    return _ok({"ok": True})
+
+
+@projects_bp.route("/chats/<chat_id>/messages", methods=["POST"])
+@access_required("can_chat")
+def append_chat_messages(chat_id):
+    """Append finished messages: {"messages": [{"role": "user"|"assistant", "content": "..."}]}."""
+    chat = _own_chat(chat_id)
+    if not chat:
+        return jsonify({"error": "Conversation not found."}), 404
+    items = _json().get("messages")
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "messages is required."}), 400
+    clean = []
+    for m in items:
+        role, content = m.get("role"), str(m.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            clean.append((role, content[:MAX_MESSAGE_CHARS]))
+    if not clean:
+        return jsonify({"error": "No non-empty messages."}), 400
+    with projects_db.cursor() as cur:
+        for role, content in clean:
+            cur.execute("INSERT INTO chat_messages (conversation_id, role, content) VALUES (%s, %s, %s)",
+                        [chat_id, role, content])
+        first_user = next((c for r, c in clean if r == "user"), None)
+        if first_user and chat["title"] == "New chat":
+            cur.execute("UPDATE chat_conversations SET title = %s WHERE id = %s",
+                        [" ".join(first_user.split())[:60], chat_id])
+        cur.execute("UPDATE chat_conversations SET updated_at = now() WHERE id = %s", [chat_id])
+    return _ok({"ok": True, "saved": len(clean)})
+
+
+# --------------------------------------------------------------------------
 # Chatbot pass-through. The browser runs the chat logic (tools, loop) but must
 # never hold the Anthropic key: it posts the usual Messages API body here and we
 # forward it with the key added server-side. Only the configured model and a
