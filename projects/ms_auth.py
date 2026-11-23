@@ -97,14 +97,12 @@ def load_access(profile: dict) -> dict:
     """Access flags for a validated profile.
 
     - Super user: everything (the only person who can edit projects or open the Access page).
-    - Always-admin company emails: Dashboard, Projects and Chat (view only).
-    - Everyone else: the Dashboard / Projects / Chat flags saved for them. Edit and
-      Admin can never come from the table, even if an old row has them set.
+    - Everyone else, including the company admin emails: ONLY what is ticked for them on the
+      Access page (Dashboard / Projects / DGMTS Ask). No row means no access to anything.
+      Edit and Admin can never come from the table, even if an old row has them set.
     """
     if profile.get("superuser"):
         return {f: True for f in FLAGS}
-    if is_admin_email(profile.get("email")):
-        return _all(can_dashboard=True, can_projects=True, can_chat=True)
     row = projects_db.query_one(
         "SELECT can_dashboard, can_projects, can_chat FROM user_access "
         "WHERE employee_user_id = %s OR (email IS NOT NULL AND lower(email) = %s) "

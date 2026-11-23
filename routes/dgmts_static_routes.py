@@ -27,7 +27,7 @@ ALLOWED_TABLES = frozenset({
     'blogs', 'categories', 'news', 'events', 'subscribers', 'subscriber_groups',
     'subscriber_group_members', 'subscriber_newsletter_email_logs', 'email_config',
     'payments', 'payment_portal_users', 'dgmts_contact_persons', 'credentials',
-    'about_employees', 'about_leaders', 'email_outbox',
+    'about_employees', 'about_leaders', 'email_outbox', 'careers',
 })
 
 ALLOWED_BUCKETS = frozenset({
