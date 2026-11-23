@@ -49,11 +49,21 @@ chk("recipients parsed", ca.recipients() == ["a@x.com", "b@x.com"])
 subj, html = ca.build_email(ITEM, "DC", 4, 5)
 chk("email escapes + content", "&lt;M&gt;" in html and "DC" in html and "4 left" in subj)
 
+chk("item emails win, else defaults", ca.recipients({"notify_emails": "X@y.com; z@y.com"}) == ["x@y.com", "z@y.com"]
+    and ca.recipients({"notify_emails": None}) == ["a@x.com", "b@x.com"] and ca.recipients({"notify_emails": "  "}) == ["a@x.com", "b@x.com"])
+chk("normalize: split/dedupe/lower", ca.normalize_emails("A@x.com, a@x.com;b@x.com\nc@x.com") == ("a@x.com, b@x.com, c@x.com", None))
+chk("normalize: blank -> None", ca.normalize_emails("  ") == (None, None))
+chk("normalize: invalid rejected", ca.normalize_emails("good@x.com, nope")[1] is not None)
+
 st["cols_ok"] = False
 r = c.post("/api/inventory/consumable-items", json={"code":"A","description":"d","supplier_id":"s","min_qty":"7"})
 chk("create adds column + stores min_qty", r.status_code == 201 and st["alter"] == 1 and st["items"][-1]["min_qty"] == 7)
 r = c.post("/api/inventory/consumable-items", json={"code":"B","description":"d","supplier_id":"s"})
 chk("create without min_qty untouched", "min_qty" not in st["items"][-1])
+r = c.post("/api/inventory/consumable-items", json={"code":"E","description":"d","supplier_id":"s","notify_emails":"P@x.com;q@x.com"})
+chk("create stores normalized notify_emails", r.status_code == 201 and st["items"][-1]["notify_emails"] == "p@x.com, q@x.com")
+chk("create rejects bad email", c.post("/api/inventory/consumable-items", json={"code":"F","description":"d","supplier_id":"s","notify_emails":"bad"}).status_code == 400)
+r = c.patch("/api/inventory/consumable-items/n1", json={"notify_emails": ""}); chk("patch blank clears", r.status_code == 200 and st["items"][-1][2][0] is None)
 chk("negative rejected", c.post("/api/inventory/consumable-items", json={"code":"C","description":"d","supplier_id":"s","min_qty":-1}).status_code == 400)
 chk("non-number rejected", c.post("/api/inventory/consumable-items", json={"code":"C","description":"d","supplier_id":"s","min_qty":"abc"}).status_code == 400)
 chk("blank -> 0", (c.post("/api/inventory/consumable-items", json={"code":"D","description":"d","supplier_id":"s","min_qty":""}), st["items"][-1]["min_qty"] == 0)[1])
@@ -76,7 +86,7 @@ c.post("/api/inventory/consumption-logs", json={"item_id":"it1","employee_identi
 chk("min_qty 0: never emails", len(sent) == 2)
 ITEM["min_qty"] = 5; ca.recipients = lambda: []
 chk("no recipients: no crash", c.put("/api/inventory/inventory-stock", json={"item_id":"it1","branch":"Maryland","quantity":1}).status_code == 200)
-ir._MIN_QTY_READY = False; ir._MIN_QTY_NEXT_TRY = 0; st["cols_ok"] = False
+ir._COLUMNS_READY.clear(); ir._COLUMNS_NEXT_TRY.clear(); st["cols_ok"] = False
 fake.execute = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no privilege"))
 n = len(sent)
 r = c.put("/api/inventory/inventory-stock", json={"item_id":"it1","branch":"DC","quantity":1})

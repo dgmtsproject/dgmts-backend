@@ -10,6 +10,7 @@ Failures here never affect the stock update itself.
 
 from __future__ import annotations
 
+import re
 import threading
 
 from config import Config
@@ -24,8 +25,36 @@ def crossed_minimum(prev_qty: int | None, new_qty: int, min_qty: int) -> bool:
     return prev_qty is None or prev_qty > min_qty
 
 
-def recipients() -> list[str]:
-    return [e.strip() for e in (Config.INVENTORY_LOW_STOCK_NOTIFY_EMAILS or "").split(",") if e.strip()]
+_EMAIL_RE = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$")
+
+
+def split_emails(raw) -> list[str]:
+    """Splits on commas, semicolons, spaces and new lines; lower-cases and de-duplicates."""
+    out: list[str] = []
+    for part in re.split(r"[,;\s]+", str(raw or "")):
+        part = part.strip().lower()
+        if part and part not in out:
+            out.append(part)
+    return out
+
+
+def normalize_emails(raw) -> tuple[str | None, str | None]:
+    """(comma-joined emails or None when blank, error message)."""
+    emails = split_emails(raw)
+    bad = [e for e in emails if not _EMAIL_RE.match(e)]
+    if bad:
+        return None, f"Not a valid email address: {', '.join(bad)}"
+    return (", ".join(emails) or None), None
+
+
+def default_recipients() -> list[str]:
+    return split_emails(Config.INVENTORY_LOW_STOCK_NOTIFY_EMAILS)
+
+
+def recipients(item: dict | None = None) -> list[str]:
+    """The item's own list when it has one, otherwise the default list."""
+    own = split_emails((item or {}).get("notify_emails"))
+    return own or default_recipients()
 
 
 def build_email(item: dict, branch: str, new_qty: int, min_qty: int) -> tuple[str, str]:
@@ -50,7 +79,7 @@ def build_email(item: dict, branch: str, new_qty: int, min_qty: int) -> tuple[st
 
 def _send(item: dict, branch: str, new_qty: int, min_qty: int) -> None:
     try:
-        to = recipients()
+        to = recipients(item)
         if not to:
             return
         subject, html = build_email(item, branch, new_qty, min_qty)
@@ -68,7 +97,7 @@ def check_and_notify(item_id, branch: str, prev_qty: int | None, new_qty: int,
     try:
         item = inventory_db.query_one(
             """
-            SELECT i.code, i.description, i.min_qty, s.name AS supplier_name
+            SELECT i.*, s.name AS supplier_name
             FROM consumable_items i LEFT JOIN suppliers s ON s.id = i.supplier_id
             WHERE i.id = %s
             """,

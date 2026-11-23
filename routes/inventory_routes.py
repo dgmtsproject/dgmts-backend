@@ -355,36 +355,43 @@ def create_supplier():
     return _json_ok(row, 201)
 
 
-_MIN_QTY_READY = False
-_MIN_QTY_NEXT_TRY = 0.0
+_COLUMNS_READY: dict[str, bool] = {}
+_COLUMNS_NEXT_TRY: dict[str, float] = {}
+_COLUMN_DDL = {
+    "min_qty": "min_qty INTEGER NOT NULL DEFAULT 0 CHECK (min_qty >= 0)",
+    "notify_emails": "notify_emails TEXT",
+}
 
 
-def _min_qty_column_ready() -> bool:
-    """True when consumable_items.min_qty exists. Adds it on first use if the DB
-    user may; otherwise the feature stays off and everything else works as before."""
-    global _MIN_QTY_READY, _MIN_QTY_NEXT_TRY
-    if _MIN_QTY_READY:
+def _item_column_ready(column: str) -> bool:
+    """True when consumable_items.<column> exists. Adds it on first use if the DB
+    user may; otherwise that feature stays off and everything else works as before."""
+    if _COLUMNS_READY.get(column):
         return True
-    if time.time() < _MIN_QTY_NEXT_TRY:
+    if time.time() < _COLUMNS_NEXT_TRY.get(column, 0.0):
         return False
     check = (
         "SELECT 1 FROM information_schema.columns "
         "WHERE table_schema = current_schema() AND table_name = 'consumable_items' "
-        "AND column_name = 'min_qty'"
+        "AND column_name = %s"
     )
+    ready = False
     try:
-        if not inventory_db.query_one(check):
+        if not inventory_db.query_one(check, [column]):
             inventory_db.execute(
-                "ALTER TABLE consumable_items ADD COLUMN IF NOT EXISTS "
-                "min_qty INTEGER NOT NULL DEFAULT 0 CHECK (min_qty >= 0)"
+                f"ALTER TABLE consumable_items ADD COLUMN IF NOT EXISTS {_COLUMN_DDL[column]}"
             )
-        _MIN_QTY_READY = bool(inventory_db.query_one(check))
+        ready = bool(inventory_db.query_one(check, [column]))
     except Exception as e:  # noqa: BLE001
-        print(f"[inventory] min_qty column unavailable: {e}")
-        _MIN_QTY_READY = False
-    if not _MIN_QTY_READY:
-        _MIN_QTY_NEXT_TRY = time.time() + 300
-    return _MIN_QTY_READY
+        print(f"[inventory] consumable_items.{column} unavailable: {e}")
+    _COLUMNS_READY[column] = ready
+    if not ready:
+        _COLUMNS_NEXT_TRY[column] = time.time() + 300
+    return ready
+
+
+def _min_qty_column_ready() -> bool:
+    return _item_column_ready("min_qty")
 
 
 def _parse_min_qty(raw):
@@ -404,6 +411,7 @@ def _parse_min_qty(raw):
 @ms_auth_optional
 def list_consumable_items():
     _min_qty_column_ready()
+    _item_column_ready("notify_emails")
     code = (request.args.get("code") or "").strip()
     where, params = "", []
     if code:
@@ -455,6 +463,12 @@ def create_consumable_item():
             return jsonify({"error": err}), 400
         if _min_qty_column_ready():
             values["min_qty"] = min_qty
+    if "notify_emails" in data:
+        emails, err = consumable_alerts.normalize_emails(data.get("notify_emails"))
+        if err:
+            return jsonify({"error": err}), 400
+        if _item_column_ready("notify_emails"):
+            values["notify_emails"] = emails
     try:
         row = _insert("consumable_items", values)
     except Exception as e:  # noqa: BLE001
@@ -476,6 +490,12 @@ def update_consumable_item(item_id):
             return jsonify({"error": err}), 400
         if _min_qty_column_ready():
             incoming["min_qty"] = min_qty
+    if "notify_emails" in data:
+        emails, err = consumable_alerts.normalize_emails(data.get("notify_emails"))
+        if err:
+            return jsonify({"error": err}), 400
+        if _item_column_ready("notify_emails"):
+            incoming["notify_emails"] = emails
     row = _update("consumable_items", incoming, "id = %s", [item_id])
     if not row:
         return jsonify({"error": "Item not found"}), 404

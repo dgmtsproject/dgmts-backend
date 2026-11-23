@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS inventory.consumable_items (
     expiration_date  DATE,
     qr_code_data_url TEXT,
     min_qty          INTEGER NOT NULL DEFAULT 0 CHECK (min_qty >= 0),
+    notify_emails    TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 -- Existing databases: see inventory_migration_min_qty.sql (the API also adds it on first use).
