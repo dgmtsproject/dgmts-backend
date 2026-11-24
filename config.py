@@ -264,11 +264,9 @@ class Config:
         or TASKS_SMTP_USERNAME
     )
 
-    # Employee directory feed (same one the inventory app exposes).
-    TASKS_EMPLOYEES_SOURCE_URL = os.getenv(
-        'TASKS_EMPLOYEES_SOURCE_URL',
-        'https://imsite.dullesgeotechnical.com/api/inventory/ms-directory/employees',
-    )
+    # Employee directory feed. Empty = read the inventory module's directory table directly (no HTTP,
+    # so it also works from a request on a single gunicorn worker). Set a URL to use a different feed.
+    TASKS_EMPLOYEES_SOURCE_URL = os.getenv('TASKS_EMPLOYEES_SOURCE_URL', '')
 
     # Background jobs inside the Flask process: send queued emails, hourly employee
     # sync, 8am due-date digest. Only one gunicorn worker runs them.

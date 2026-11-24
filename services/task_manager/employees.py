@@ -9,7 +9,16 @@ from config import Config
 from models.tasks_db import tasks_db
 
 
+def _rows_from_inventory_db() -> list[dict]:
+    """Read-only copy of the inventory module's cached MS directory (same data its API serves)."""
+    from models.inventory_db import inventory_db
+
+    return inventory_db.query("SELECT * FROM ms_directory_employees ORDER BY name")
+
+
 def _rows_from_source() -> list[dict]:
+    if not (Config.TASKS_EMPLOYEES_SOURCE_URL or "").strip():
+        return _rows_from_inventory_db()
     resp = requests.get(Config.TASKS_EMPLOYEES_SOURCE_URL, headers={"Accept": "application/json"}, timeout=60)
     if resp.status_code != 200:
         raise RuntimeError(f"Employee directory returned HTTP {resp.status_code}")
@@ -27,6 +36,7 @@ def map_rows(rows: list[dict]) -> list[dict]:
         except (TypeError, ValueError):
             active = False
         eid = r.get("employee_id")
+        updated = r.get("updated_at")
         out.append({
             "id": str(r.get("ms_user_id") if r.get("ms_user_id") is not None else "").strip(),
             "full_name": str(r.get("name") or "").strip(),
@@ -35,7 +45,7 @@ def map_rows(rows: list[dict]) -> list[dict]:
             "department": r.get("department_name"),
             "badge_employee_id": None if eid is None else str(eid),
             "is_active": active,
-            "source_updated_at": r.get("updated_at"),
+            "source_updated_at": updated.isoformat() if hasattr(updated, "isoformat") else updated,
         })
     return out
 
