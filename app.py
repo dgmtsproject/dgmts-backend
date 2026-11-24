@@ -59,6 +59,17 @@ if Config.PROJECTS_MODULE_ENABLED:
     except Exception as _proj_err:  # noqa: BLE001
         print(f"[projects] module DISABLED (failed to load): {_proj_err}")
 
+# Task Manager module (isolated, additive) — same pattern as inventory and projects.
+if Config.TASKS_MODULE_ENABLED:
+    try:
+        from routes.task_manager_routes import task_manager_bp
+        app.register_blueprint(task_manager_bp)
+        from services.task_manager.jobs import start_jobs
+        start_jobs()
+        print("[tasks] module enabled at /api/tasks")
+    except Exception as _tasks_err:  # noqa: BLE001
+        print(f"[tasks] module DISABLED (failed to load): {_tasks_err}")
+
 # Root route
 @app.route('/')
 def index():

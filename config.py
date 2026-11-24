@@ -216,6 +216,66 @@ class Config:
     INVENTORY_SUPERUSER_HOURS = int(os.getenv('INVENTORY_SUPERUSER_HOURS', '8'))
     INVENTORY_SUPERUSER_EMAIL = os.getenv('INVENTORY_SUPERUSER_EMAIL', 'admin@gmail.com')
 
+    # ------------------------------------------------------------------
+    # Task Manager module (isolated; own schema, role, pool and routes).
+    # ------------------------------------------------------------------
+    TASKS_MODULE_ENABLED = os.getenv('TASKS_MODULE_ENABLED', 'true').lower() == 'true'
+    TASKS_DB_HOST = os.getenv('TASKS_DB_HOST', os.getenv('STATIC_DB_HOST', '127.0.0.1'))
+    TASKS_DB_PORT = int(os.getenv('TASKS_DB_PORT', os.getenv('STATIC_DB_PORT', '5432')))
+    TASKS_DB_NAME = os.getenv('TASKS_DB_NAME', os.getenv('STATIC_DB_NAME', 'dgmts_static_db'))
+    TASKS_DB_USER = os.getenv('TASKS_DB_USER', 'dgmts_tasks_user')
+    # Same password as the inventory role unless TASKS_DB_PASSWORD is set (the role itself stays separate).
+    TASKS_DB_PASSWORD = os.getenv('TASKS_DB_PASSWORD', os.getenv('INVENTORY_DB_PASSWORD'))
+    TASKS_DB_SCHEMA = os.getenv('TASKS_DB_SCHEMA', 'tasks')
+
+    # Company login: the app sends the MS token; we confirm it with MS /user/me.
+    TASKS_MS_API_BASE_URL = os.getenv(
+        'TASKS_MS_API_BASE_URL',
+        os.getenv('INVENTORY_MS_API_BASE_URL', 'https://ms.dullesgeotechnical.com/api/v2'),
+    )
+    # Signs the session token handed out by the login-id/password sign-in.
+    TASKS_SESSION_SECRET = os.getenv('TASKS_SESSION_SECRET')
+    TASKS_SESSION_DAYS = int(os.getenv('TASKS_SESSION_DAYS', '7'))
+    # When true, only accounts created by an admin (admin + test users) may use the
+    # password form; directory employees must come in through the company login.
+    TASKS_PASSWORD_LOGIN_ADMIN_ONLY = os.getenv('TASKS_PASSWORD_LOGIN_ADMIN_ONLY', 'false').lower() == 'true'
+    # Company-login accounts that get the Admin tab (comma separated emails).
+    TASKS_ADMIN_EMAILS = [
+        e.strip().lower()
+        for e in os.getenv(
+            'TASKS_ADMIN_EMAILS',
+            'admin@gmail.com,iaziz@dullesgeotechnical.com,qhaider@dullesgeotechnical.com',
+        ).split(',')
+        if e.strip()
+    ]
+
+    # Public URL of the static Task Manager site (used for links inside emails).
+    TASKS_APP_PUBLIC_BASE = os.getenv('TASKS_APP_PUBLIC_BASE', 'https://tasks.dullesgeotechnical.com')
+    TASKS_COMPANY_TIMEZONE = os.getenv('TASKS_COMPANY_TIMEZONE', 'America/New_York')
+
+    # Outgoing mail: uses the same SMTP account as the inventory module unless TASKS_SMTP_* is set.
+    TASKS_SMTP_HOST = os.getenv('TASKS_SMTP_HOST', os.getenv('INVENTORY_SMTP_HOST'))
+    TASKS_SMTP_PORT = int(os.getenv('TASKS_SMTP_PORT', os.getenv('INVENTORY_SMTP_PORT', '465')))
+    TASKS_SMTP_USE_SSL = os.getenv('TASKS_SMTP_USE_SSL', os.getenv('INVENTORY_SMTP_USE_SSL', 'true')).lower() == 'true'
+    TASKS_SMTP_USERNAME = os.getenv('TASKS_SMTP_USERNAME', os.getenv('INVENTORY_SMTP_USERNAME'))
+    TASKS_SMTP_PASSWORD = os.getenv('TASKS_SMTP_PASSWORD', os.getenv('INVENTORY_SMTP_PASSWORD'))
+    TASKS_SMTP_FROM = (
+        os.getenv('TASKS_SMTP_FROM') or os.getenv('INVENTORY_SMTP_FROM')
+        or TASKS_SMTP_USERNAME
+    )
+
+    # Employee directory feed (same one the inventory app exposes).
+    TASKS_EMPLOYEES_SOURCE_URL = os.getenv(
+        'TASKS_EMPLOYEES_SOURCE_URL',
+        'https://imsite.dullesgeotechnical.com/api/inventory/ms-directory/employees',
+    )
+
+    # Background jobs inside the Flask process: send queued emails, hourly employee
+    # sync, 8am due-date digest. Only one gunicorn worker runs them.
+    TASKS_JOBS_ENABLED = os.getenv('TASKS_JOBS_ENABLED', 'true').lower() == 'true'
+    TASKS_OUTBOX_INTERVAL_SECONDS = int(os.getenv('TASKS_OUTBOX_INTERVAL_SECONDS', '30'))
+    TASKS_EMPLOYEE_SYNC_MINUTES = int(os.getenv('TASKS_EMPLOYEE_SYNC_MINUTES', '60'))
+
     # Projects chatbot: the Anthropic key stays here; the frontend only talks to
     # the /api/projects/chat/v1/messages pass-through (needs the Chat permission).
     PROJECTS_ANTHROPIC_API_KEY = os.getenv('PROJECTS_ANTHROPIC_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
