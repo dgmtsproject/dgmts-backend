@@ -8,7 +8,7 @@
 -- ======================================================================
 
 DO $$ BEGIN
-    CREATE ROLE dgmts_tasks_user LOGIN PASSWORD 'REPLACE_WITH_STRONG_PASSWORD';
+    CREATE ROLE dgmts_tasks_user LOGIN PASSWORD 'admin';
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 GRANT CONNECT ON DATABASE dgmts_static_db TO dgmts_tasks_user;
