@@ -14,6 +14,7 @@ import uuid
 from datetime import date, datetime, time as dt_time
 from decimal import Decimal
 
+import psycopg2
 import requests
 from flask import Blueprint, Response, jsonify, request
 
@@ -365,6 +366,107 @@ def _maybe_refresh_directory(bearer: str) -> None:
             return
         _directory_checked_at = now
     threading.Thread(target=_refresh_directory, args=(bearer,), daemon=True).start()
+
+
+# --------------------------------------------------------------------------
+# Files attached to a project's notes (any format). Everyone with Projects access
+# can list and download; only people who can edit (the super user) can add or
+# remove. Files are always served as downloads, never opened in the browser, so an
+# uploaded web page or script can't run on our site.
+# --------------------------------------------------------------------------
+def _project_id(number: str):
+    row = projects_db.query_one("SELECT id FROM archive_projects WHERE project_number = %s", [number])
+    return row["id"] if row else None
+
+
+def _clean_filename(name: str) -> str:
+    name = (name or "file").replace("\\", "/").split("/")[-1]
+    name = "".join(ch for ch in name if ch.isprintable() and ch not in '<>:"|?*').strip(" .")
+    return name[:200] or "file"
+
+
+def _file_meta(r: dict) -> dict:
+    return {"id": r["id"], "file_name": r["file_name"], "content_type": r["content_type"],
+            "size_bytes": r["size_bytes"], "uploaded_by": r["uploaded_by"], "uploaded_at": r["uploaded_at"]}
+
+
+@projects_bp.route("/files/<number>", methods=["GET"])
+@access_required("can_projects")
+def list_note_files(number):
+    pid = _project_id(number)
+    if not pid:
+        return jsonify({"error": "Project not found."}), 404
+    return _ok(projects_db.query(
+        "SELECT id, file_name, content_type, size_bytes, uploaded_by, uploaded_at "
+        "FROM project_note_files WHERE project_id = %s ORDER BY uploaded_at DESC", [pid]))
+
+
+@projects_bp.route("/files/<number>", methods=["POST"])
+@access_required("can_edit")
+def upload_note_files(number):
+    pid = _project_id(number)
+    if not pid:
+        return jsonify({"error": "Project not found."}), 404
+    limit = Config.PROJECTS_MAX_FILE_MB * 1024 * 1024
+    uploads = request.files.getlist("file")
+    if not uploads:
+        return jsonify({"error": "No file received."}), 400
+    saved, skipped = [], []
+    for f in uploads:
+        data = f.read(limit + 1)
+        name = _clean_filename(f.filename)
+        if not data:
+            skipped.append(f"{name} (empty)")
+            continue
+        if len(data) > limit:
+            skipped.append(f"{name} (over {Config.PROJECTS_MAX_FILE_MB} MB)")
+            continue
+        row = projects_db.execute_one(
+            "INSERT INTO project_note_files (project_id, file_name, content_type, size_bytes, data, uploaded_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "RETURNING id, file_name, content_type, size_bytes, uploaded_by, uploaded_at",
+            [pid, name, (f.mimetype or None), len(data), psycopg2.Binary(data), request.projects_user["full_name"] or request.projects_user["email"]])
+        saved.append(row)
+    status = 200 if saved else 400
+    return _ok({"saved": saved, "skipped": skipped}, status)
+
+
+@projects_bp.route("/files/<number>/<file_id>", methods=["GET"])
+@access_required("can_projects")
+def download_note_file(number, file_id):
+    pid = _project_id(number)
+    try:
+        uuid.UUID(file_id)
+    except ValueError:
+        pid = None
+    row = projects_db.query_one(
+        "SELECT file_name, data FROM project_note_files WHERE id = %s AND project_id = %s", [file_id, pid]) if pid else None
+    if not row:
+        return jsonify({"error": "File not found."}), 404
+    from urllib.parse import quote
+    return Response(
+        bytes(row["data"]),
+        content_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(row['file_name'])}",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@projects_bp.route("/files/<number>/<file_id>", methods=["DELETE"])
+@access_required("can_edit")
+def delete_note_file(number, file_id):
+    pid = _project_id(number)
+    try:
+        uuid.UUID(file_id)
+    except ValueError:
+        pid = None
+    if not pid or not projects_db.execute(
+            "DELETE FROM project_note_files WHERE id = %s AND project_id = %s", [file_id, pid]):
+        return jsonify({"error": "File not found."}), 404
+    return _ok({"ok": True})
 
 
 # --------------------------------------------------------------------------

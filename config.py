@@ -274,6 +274,9 @@ class Config:
     TASKS_OUTBOX_INTERVAL_SECONDS = int(os.getenv('TASKS_OUTBOX_INTERVAL_SECONDS', '30'))
     TASKS_EMPLOYEE_SYNC_MINUTES = int(os.getenv('TASKS_EMPLOYEE_SYNC_MINUTES', '60'))
 
+    # Files attached to project notes are stored in the database (bytea).
+    PROJECTS_MAX_FILE_MB = int(os.getenv('PROJECTS_MAX_FILE_MB', '25'))
+
     # Projects chatbot: the Anthropic key stays here; the frontend only talks to
     # the /api/projects/chat/v1/messages pass-through (needs the Chat permission).
     PROJECTS_ANTHROPIC_API_KEY = os.getenv('PROJECTS_ANTHROPIC_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
